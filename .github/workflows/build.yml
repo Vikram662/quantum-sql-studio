@@ -1,0 +1,54 @@
+# Builds Windows, macOS and Linux packages. Runs on a version tag (v2.1.0) and attaches the files to the
+# GitHub release; can also be started by hand from the Actions tab (files are then kept as workflow artifacts).
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, macos-13, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          ./build.ps1
+
+      - name: Build (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y libxcb-cursor0; fi
+          chmod +x build.sh && ./build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QuantumSQL-${{ matrix.os }}
+          path: |
+            Output/*.exe
+            dist/*.dmg
+            dist/*.tar.gz
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Output/*.exe
+            dist/*.dmg
+            dist/*.tar.gz

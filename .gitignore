@@ -1,0 +1,10 @@
+build/
+dist/
+Output/
+__pycache__/
+*.pyc
+*.spec
+.venv/
+venv/
+*.log
+.DS_Store

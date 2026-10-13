@@ -1,0 +1,2 @@
+APP_NAME = "Quantum SQL"
+APP_VERSION = "2.0.0"
