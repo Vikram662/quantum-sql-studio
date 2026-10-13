@@ -24,6 +24,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\Output
 OutputBaseFilename=QuantumSQL_Setup_{#AppVersion}
+LicenseFile=..\LICENSE
 SetupIconFile=..\app_icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}

@@ -25,6 +25,8 @@ $PY -m PyInstaller --noconfirm --clean --windowed --onedir \
     --icon app_icon.ico \
     --add-data "app_icon.ico:." \
     --add-data "docs/USER_GUIDE.md:docs" \
+    --add-data "LICENSE:." \
+    --add-data "THIRD_PARTY_NOTICES.txt:." \
     --osx-bundle-identifier com.quantumsql.studio \
     "${ARGS[@]}" \
     run.py

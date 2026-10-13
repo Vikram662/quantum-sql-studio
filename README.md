@@ -65,3 +65,6 @@ PyInstaller does not cross-compile, so build on each system:
 ./build.sh      # macOS -> dist/QuantumSQL-<version>-macos-<arch>.dmg, Linux -> dist/QuantumSQL-<version>-linux-<arch>.tar.gz
 ```
 Or push a tag such as `v2.1.0` to GitHub. `.github/workflows/build.yml` builds the Windows installer, the macOS .dmg (Apple Silicon and Intel) and the Linux .tar.gz, and attaches them to the release. The macOS build is ad-hoc signed only. For distribution without the "unidentified developer" prompt, sign and notarize it with an Apple Developer ID.
+
+## License
+Quantum SQL is free and open source under the [MIT License](LICENSE). It bundles third-party open source components, listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

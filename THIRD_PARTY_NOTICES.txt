@@ -1,0 +1,20 @@
+Quantum SQL is released under the MIT License (see LICENSE).
+The packaged app also contains the following open source components, each under its own license.
+
+Qt / PySide6 (Qt for Python)  - LGPL-3.0           - https://www.qt.io/  https://doc.qt.io/qtforpython/
+  Qt is used as separate, unmodified shared libraries. You may replace them with your own build of the
+  same Qt version. Source code: https://download.qt.io/  https://code.qt.io/
+shiboken6                     - LGPL-3.0           - https://doc.qt.io/qtforpython/
+paramiko                      - LGPL-2.1           - https://www.paramiko.org/  (source: https://github.com/paramiko/paramiko)
+PyMySQL                       - MIT                - https://github.com/PyMySQL/PyMySQL
+cryptography                  - Apache-2.0 or BSD  - https://github.com/pyca/cryptography
+bcrypt, PyNaCl                - Apache-2.0         - https://github.com/pyca
+anthropic (Python SDK)        - MIT                - https://github.com/anthropics/anthropic-sdk-python
+httpx, httpcore, anyio, pydantic, typing-extensions, idna, certifi (MPL-2.0), h11, sniffio,
+distro, jiter, cffi, pycparser - MIT / BSD / Apache-2.0 / MPL-2.0 (see each project)
+keyring (macOS / Linux only)  - MIT                - https://github.com/jaraco/keyring
+Python                        - PSF License        - https://www.python.org/
+PyInstaller bootloader        - GPL-2.0 with an exception that allows distributing apps built with it
+                                                   - https://pyinstaller.org/
+
+The full license text of each component is available at the links above.
