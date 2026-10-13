@@ -1,5 +1,5 @@
 PySide6-Essentials>=6.6
-PyMySQL>=1.1
+PyMySQL>=2.2  # 2.x encrypts the connection (TLS) whenever the server supports it
 paramiko>=3.4
 cryptography>=42
 anthropic>=1.13

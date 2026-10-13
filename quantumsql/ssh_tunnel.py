@@ -1,4 +1,5 @@
 """SSH tunnels (paramiko): reach a MySQL server that is only listening on the SSH host's private network."""
+import os
 import select
 import socket
 import threading
@@ -23,7 +24,18 @@ class SshTunnel:
     def start(self):
         import paramiko
         host, port, user, password, key_file, key_pass = self.args
+        from .config import data_dir
         client = paramiko.SSHClient()
+        # Trust on first use: remember each server's host key and refuse the connection if it later changes
+        # (paramiko raises BadHostKeyException) — that is what a man-in-the-middle would look like.
+        known_hosts = os.path.join(data_dir(), "known_hosts")
+        try:
+            client.load_system_host_keys()
+        except OSError:
+            pass
+        if not os.path.exists(known_hosts):
+            open(known_hosts, "a").close()
+        client.load_host_keys(known_hosts)
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         kwargs = {"hostname": host, "port": port, "username": user, "timeout": self.timeout,
                   "banner_timeout": self.timeout, "auth_timeout": self.timeout, "allow_agent": not password,
@@ -34,7 +46,14 @@ class SshTunnel:
                 kwargs["passphrase"] = key_pass
         if password:
             kwargs["password"] = password
-        client.connect(**kwargs)
+        try:
+            client.connect(**kwargs)
+        except paramiko.BadHostKeyException as exc:
+            raise ConnectionError(
+                f"SSH host key for {host} has CHANGED — connection refused. This can mean someone is intercepting "
+                f"the connection. If the server was reinstalled on purpose, remove its line from {known_hosts}."
+            ) from exc
+        client.save_host_keys(known_hosts)
         self.client = client
         self.transport = client.get_transport()
         self.transport.set_keepalive(30)

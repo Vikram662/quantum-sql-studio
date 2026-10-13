@@ -20,7 +20,7 @@ from .result_tools import ResultPanel
 from .sqlformat import format_script
 from .grid import DataGrid, ResultModel
 from .theme import T
-from .ui import bar, muted, tool
+from .ui import LoadingOverlay, bar, muted, tool
 
 MAX_ROWS = 50_000
 
@@ -106,6 +106,7 @@ class QueryTab(QWidget):
 
         self.results = QTabWidget()
         self.results.setObjectName("subtabs")
+        self.loader = LoadingOverlay(self.results)
         self.messages = QPlainTextEdit()
         self.messages.setReadOnly(True)
         self.messages.setFont(theme.code_font(10))
@@ -205,6 +206,7 @@ class QueryTab(QWidget):
         conn, db = self.conn, self.current_db()
         tables = set(table_aliases(sql).values())
         self.main.status("Explaining…")
+        self.loader.start("Explaining…")
 
         def work():
             with conn.lock:
@@ -223,6 +225,7 @@ class QueryTab(QWidget):
                 return cols, rows, meta
 
         def done(res):
+            self.loader.stop()
             cols, rows, meta = res
             self._clear_results()
             view = ExplainView(sql, cols, rows, meta,
@@ -236,6 +239,7 @@ class QueryTab(QWidget):
             self.main.status("Explain ready — see the advisor for index suggestions.")
 
         def failed(e):
+            self.loader.stop()
             self._log([("error", e)])
             self.results.setCurrentWidget(self.messages)
             self.main.status(e, error=True)
@@ -375,6 +379,7 @@ class QueryTab(QWidget):
         self._t0 = time.perf_counter()
         self._set_running(True)
         self.main.status(f"Executing {len(stmts)} statement(s)…")
+        self.loader.start("Running query…  (Stop cancels it)")
 
         def work(task):
             results, log, error = [], [], None
@@ -386,7 +391,8 @@ class QueryTab(QWidget):
                 if db:
                     conn.use(db)
                 self.thread_id = conn.thread_id()
-                cur = conn.conn.cursor()
+                # Unbuffered: rows stream from the server, so a huge result never has to fit in memory.
+                cur = conn.conn.cursor(pymysql.cursors.SSCursor)
                 changed = 0
                 if start_txn:
                     cur.execute("START TRANSACTION")
@@ -399,14 +405,21 @@ class QueryTab(QWidget):
                     query_log.message.emit(sql, "sql")
                     try:
                         cur.execute(sql)
-                        ms = (time.perf_counter() - t0) * 1000
                         if cur.description:
                             headers = [d[0] for d in cur.description]
-                            rows = cur.fetchall()
+                            rows = list(cur.fetchmany(MAX_ROWS))
                             total = len(rows)
-                            results.append((headers, list(rows[:MAX_ROWS]), total, sql, ms))
+                            # Count (but don't keep) the rest; Stop sends KILL QUERY, which ends the stream.
+                            while not task.cancelled:
+                                chunk = cur.fetchmany(5000)
+                                if not chunk:
+                                    break
+                                total += len(chunk)
+                            ms = (time.perf_counter() - t0) * 1000
+                            results.append((headers, rows, total, sql, ms))
                             log.append(("ok", f"{total:,} row(s) returned  ·  {ms:.1f} ms  ·  {_short(sql)}"))
                         else:
+                            ms = (time.perf_counter() - t0) * 1000
                             if is_write(sql):
                                 changed += max(0, cur.rowcount)
                             log.append(("ok", f"{cur.rowcount:,} row(s) affected  ·  {ms:.1f} ms  ·  {_short(sql)}"))
@@ -437,6 +450,7 @@ class QueryTab(QWidget):
         self.main.query_state_changed(self)
 
     def _crashed(self, msg):
+        self.loader.stop()
         if self.in_txn:
             msg += "\n\nThe connection was reset — the open transaction was rolled back."
         self.in_txn = False
@@ -451,6 +465,7 @@ class QueryTab(QWidget):
             self.conn = None
 
     def _finished(self, res):
+        self.loader.stop()
         results, log, error, current, in_txn, changed = res
         self.txn_rows = self.txn_rows + changed if in_txn else 0
         self.in_txn = in_txn

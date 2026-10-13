@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QGraphicsItem, Q
 
 from .db import run_async
 from .theme import T
-from .ui import bar, muted, tool
+from .ui import LoadingOverlay, bar, muted, tool
 
 ROW_H = 18
 HEAD_H = 26
@@ -205,6 +205,7 @@ class ErDiagramDialog(QDialog):
         self.db = db
         self.scene = QGraphicsScene(self)
         self.view = ErView(self.scene)
+        self.loader = LoadingOverlay(self.view, f"Reading the schema of {db}…")
         self.items, self.fks, self.cols = {}, [], {}
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -225,10 +226,12 @@ class ErDiagramDialog(QDialog):
                           None, self.info))
         self.filter.setMaximumWidth(260)
         lay.addWidget(self.view, 1)
+        self.loader.start()
         run_async(lambda: load_model(session.conn, db), self._loaded,
-                  lambda e: self.info.setText(f"Could not load: {e}"))
+                  lambda e: (self.loader.stop(), self.info.setText(f"Could not load: {e}")))
 
     def _loaded(self, res):
+        self.loader.stop()
         self.cols, self.fks = res
         self._build()
 

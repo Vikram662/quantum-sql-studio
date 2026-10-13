@@ -20,6 +20,11 @@ def data_dir():
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     path = os.path.join(base, "QuantumSQL")
     os.makedirs(path, exist_ok=True)
+    if not IS_WINDOWS:  # sessions, history and logs hold SQL and connection details: owner only
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
     return path
 
 

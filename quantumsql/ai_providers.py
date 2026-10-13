@@ -51,8 +51,13 @@ def _ai():
     if not isinstance(cfg, dict):
         cfg = {}
     keys = settings.get("ai_keys") or {}
-    if settings.get("ai_api_key") and "anthropic" not in keys:  # key saved by the first version
-        keys["anthropic"] = settings.get("ai_api_key")
+    # Early versions kept keys in plain text (ai_api_key, then copied as-is into ai_keys): encrypt them once.
+    legacy = settings.data.pop("ai_api_key", None)
+    if legacy and "anthropic" not in keys:
+        keys["anthropic"] = legacy
+    plain = {pid: v for pid, v in keys.items() if v and not v.startswith(("dpapi:", "fernet:", "b64:"))}
+    if legacy or plain:
+        keys.update({pid: protect_secret(v) for pid, v in plain.items()})
         settings.set("ai_keys", keys)
     return cfg, keys
 

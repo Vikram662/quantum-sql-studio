@@ -9,7 +9,7 @@ from . import icons
 from .config import settings
 from .db import literal, qi, qt, run_async
 from .grid import DataGrid, ResultModel, export_rows_dialog
-from .ui import bar, confirm, muted, tool
+from .ui import LoadingOverlay, bar, confirm, muted, tool
 
 
 class DataTab(QWidget):
@@ -66,6 +66,7 @@ class DataTab(QWidget):
         self.grid.horizontalHeader().setSortIndicatorShown(True)
         self.grid.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.grid.menu_hook = self._grid_menu
+        self.loader = LoadingOverlay(self.grid)
         lay.addWidget(self.grid, 1)
 
         for keys, fn in (("Ins", self.insert_row), ("Ctrl+Del", self.delete_rows),
@@ -107,6 +108,7 @@ class DataTab(QWidget):
         sql += f" LIMIT {limit} OFFSET {offset}"
         count_sql = f"SELECT COUNT(*) FROM {qt(db, table)}" + (f" WHERE {where}" if where else "")
         self.title.setText(f"Loading {db}.{table}…")
+        self.loader.start(f"Loading {db}.{table}…")
 
         def work():
             keys = conn.primary_key(db, table) if self.kind == "table" else []
@@ -120,10 +122,12 @@ class DataTab(QWidget):
         run_async(work, self._loaded, self._failed)
 
     def _failed(self, msg):
+        self.loader.stop()
         self.title.setText("Error")
         QMessageBox.critical(self, "Data", msg)
 
     def _loaded(self, res):
+        self.loader.stop()
         keys, headers, rows, total = res
         self.key_cols, self.total = keys, total
         self.model = ResultModel(headers, rows, editable=(self.kind == "table"), offset=self.offset)

@@ -14,7 +14,7 @@ from . import APP_NAME, APP_VERSION, icons, theme
 from .config import history, resource_path, settings
 from .data_tab import DataTab
 from .database_tab import DatabaseTab
-from .db import human_size, qi, qt, query_log, run_async
+from .db import activity, human_size, qi, qt, query_log, run_async
 from .dialogs import CreateDatabaseDialog, ExportDialog, import_file
 from .host_tab import HostTab
 from .monitor_tab import MonitorTab
@@ -22,7 +22,7 @@ from .query_tab import QueryTab
 from .session_dialog import SessionDialog
 from .table_tab import TableTab
 from .theme import T
-from .ui import bar, confirm, tool
+from .ui import Spinner, bar, confirm, tool
 
 
 class ServerSession:
@@ -288,6 +288,15 @@ class MainWindow(QMainWindow):
         self.sb_conn = QLabel("Not connected")
         self.sb_time = QLabel("")
         self.sb_sel = QLabel("")
+        self.sb_spin = Spinner()
+        self.sb_busy = QLabel("")
+        self.sb_busy.setObjectName("muted")
+        self._busy_delay = QTimer(self)
+        self._busy_delay.setSingleShot(True)
+        self._busy_delay.timeout.connect(self._show_busy)
+        activity.changed.connect(self._activity_changed)
+        sb.addWidget(self.sb_spin)
+        sb.addWidget(self.sb_busy)
         sb.addWidget(self.sb_msg, 1)
         sb.addPermanentWidget(self.sb_sel)
         sb.addPermanentWidget(self.sb_time)
@@ -1067,6 +1076,22 @@ class MainWindow(QMainWindow):
     def status(self, msg, error=False):
         self.sb_msg.setText(msg.splitlines()[0][:300] if msg else "")
         self.sb_msg.setStyleSheet(f"color: {T['danger']};" if error else "")
+
+    def _activity_changed(self, n):
+        if n and not self.sb_spin.isVisible():
+            self._busy_delay.start(300)  # quick lookups finish before the indicator appears
+        elif n:
+            self._show_busy()
+        else:
+            self._busy_delay.stop()
+            self.sb_spin.stop()
+            self.sb_busy.setText("")
+
+    def _show_busy(self):
+        n = activity.count
+        if n:
+            self.sb_spin.start()
+            self.sb_busy.setText("Working…" if n == 1 else f"Working… ({n} tasks)")
 
     def set_query_time(self, ms):
         self.sb_time.setText(f"Last query: {ms:,.1f} ms")

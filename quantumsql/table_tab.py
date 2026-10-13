@@ -11,7 +11,7 @@ from .db import literal, qi, qt, run_async
 from .dialogs import ForeignKeyDialog, IndexDialog, confirm_sql
 from .editor import read_only_code_view
 from .grid import DataGrid, ResultModel
-from .ui import bar, confirm, muted, tool
+from .ui import LoadingOverlay, bar, confirm, muted, tool
 
 TYPES = ["INT", "BIGINT", "TINYINT", "SMALLINT", "MEDIUMINT", "DECIMAL", "FLOAT", "DOUBLE", "BIT", "BOOLEAN",
          "VARCHAR", "CHAR", "TEXT", "TINYTEXT", "MEDIUMTEXT", "LONGTEXT", "DATE", "DATETIME", "TIMESTAMP", "TIME",
@@ -123,6 +123,7 @@ class TableTab(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.setObjectName("subtabs")
+        self.loader = LoadingOverlay(self.tabs)
         lay.addWidget(self.tabs, 1)
 
         # columns
@@ -210,6 +211,7 @@ class TableTab(QWidget):
         self._loaded_key = (id(self.session), self.db, self.table)
         conn, db, table = self.session.conn, self.db, self.table
         self.title.setText(f"Loading {db}.{table}…")
+        self.loader.start(f"Loading {db}.{table}…")
 
         def work():
             pk = conn.primary_key(db, table)
@@ -223,7 +225,8 @@ class TableTab(QWidget):
             return cols, idx, fks, {"name": table, "engine": engine or "", "collation": coll or "",
                                     "comment": comment or ""}, code
 
-        run_async(work, lambda r: self._populate(*r), lambda e: self.main.status(e, error=True))
+        run_async(work, lambda r: self._populate(*r),
+                  lambda e: (self.loader.stop(), self.main.status(e, error=True)))
         self._load_choices()
 
     def _load_choices(self):
@@ -244,6 +247,7 @@ class TableTab(QWidget):
         run_async(lambda: (conn.engines(), conn.collations()), done)
 
     def _populate(self, cols, idx, fks, opts, code):
+        self.loader.stop()
         self.orig_cols = [dict(c) for c in cols]
         self.orig_pk = [c["name"] for c in cols if c["pk"]]
         self.orig_opts = dict(opts)

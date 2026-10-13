@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QLineEdit, QMessageBox, QVBoxLayout, QWidget
 from .db import human_size, qt, run_async
 from .dialogs import ExportDialog, import_file
 from .grid import DataGrid, ResultModel
-from .ui import bar, confirm, muted, tool
+from .ui import LoadingOverlay, bar, confirm, muted, tool
 
 HEADERS = ["Name", "Type", "Rows", "Size", "Engine", "Collation", "Created", "Updated", "Comment"]
 
@@ -39,6 +39,7 @@ class DatabaseTab(QWidget):
         self.grid = DataGrid()
         self.grid.setSelectionBehavior(DataGrid.SelectRows)
         self.grid.doubleClicked.connect(self._open)
+        self.loader = LoadingOverlay(self.grid)
         lay.addWidget(self.grid, 1)
 
     def set_database(self, session, db):
@@ -60,9 +61,15 @@ class DatabaseTab(QWidget):
         self._loaded_key = (id(self.session), self.db)
         conn, db = self.session.conn, self.db
         self.title.setText(f"Loading {db}…")
-        run_async(lambda: conn.objects(db), self._loaded, lambda e: self.main.status(e, error=True))
+        self.loader.start(f"Loading {db}…")
+        run_async(lambda: conn.objects(db), self._loaded, self._failed)
+
+    def _failed(self, msg):
+        self.loader.stop()
+        self.main.status(msg, error=True)
 
     def _loaded(self, objects):
+        self.loader.stop()
         self.objects = objects
         total = sum(o.get("size") or 0 for o in objects)
         n_tables = len([o for o in objects if o["kind"] == "table"])

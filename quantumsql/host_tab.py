@@ -7,7 +7,7 @@ from . import theme
 from .db import literal, run_async
 from .dialogs import UserDialog
 from .grid import DataGrid, ResultModel
-from .ui import bar, confirm, muted, tool
+from .ui import LoadingOverlay, bar, confirm, muted, tool
 
 
 class _GridPage(QWidget):
@@ -56,6 +56,7 @@ class HostTab(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.setObjectName("subtabs")
+        self.loader = LoadingOverlay(self.tabs)
         lay.addWidget(self.tabs, 1)
 
         self.p_dbs = _GridPage(filterable=True)
@@ -148,7 +149,12 @@ class HostTab(QWidget):
         }
         sql, page = queries[key]
 
+        polling = key == "proc" and self.auto.isChecked()
+        if not polling:  # no veil every 3 s while auto refresh is on
+            self.loader.start()
+
         def done(res):
+            self.loader.stop()
             headers, rows, _ = res
             if page is None:
                 self.users_grid.set_model(ResultModel(headers, rows))
@@ -156,7 +162,7 @@ class HostTab(QWidget):
                 page.set_data(headers, rows)
 
         run_async(lambda: conn.query(sql, log=key != "proc"), done,
-                  lambda e: self.main.status(e, error=True))
+                  lambda e: (self.loader.stop(), self.main.status(e, error=True)), quiet=polling)
 
     def _open_db(self, index):
         db = self.p_dbs.grid.model().rows[index.row()][0]

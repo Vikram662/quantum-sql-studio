@@ -6,26 +6,34 @@ performance_schema is enabled, exact per-statement statistics are shown as well.
 """
 import re
 import time
+import traceback
 from collections import Counter, defaultdict, deque
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QLabel, QMessageBox, QSplitter,
-                               QTabWidget, QTextBrowser, QVBoxLayout, QWidget)
+                               QStyledItemDelegate, QTabWidget, QTextBrowser, QVBoxLayout, QWidget)
 
 from . import icons
 from .charts import TimeSeriesChart
+from .config import data_dir
 from .db import human_size, run_async
 from .grid import DataGrid, ResultModel
 from .theme import T
-from .ui import bar, confirm, muted, tool
+from .ui import LoadingOverlay, bar, confirm, muted, tool
 
 IDLE_COMMANDS = {"Sleep", "Daemon", "Binlog Dump", "Binlog Dump GTID", "Connect", "Slave_IO", "Slave_SQL",
                  "Slave_worker"}
 INTERVALS = [("1 s", 1), ("2 s", 2), ("5 s", 5), ("10 s", 10)]
 WINDOWS = [("1 min", 60), ("5 min", 300), ("15 min", 900), ("1 hour", 3600)]
+RATE_KEYS = ("Questions", "Com_select", "Com_insert", "Com_update", "Com_delete", "Com_replace",
+             "Bytes_received", "Bytes_sent", "Slow_queries", "Connections", "Aborted_connects",
+             "Innodb_buffer_pool_read_requests", "Innodb_buffer_pool_reads", "Innodb_rows_read",
+             "Handler_read_rnd_next", "Created_tmp_disk_tables", "Select_full_join")
+ERROR_PRIOS = [("All messages", ()), ("Errors and warnings", ("Error", "Warning")), ("Errors only", ("Error",))]
 SLICES = [("Wait state", 0), ("SQL", 1), ("Application (host)", 3), ("User", 2), ("Database", 4)]
 LONG_QUERY_S = 5
+MAX_INFO = 4000  # chars of each running statement kept per sample
 
 _RX_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*|#[^\n]*", re.S)
 _RX_STRING = re.compile(r"'(?:[^'\\]|\\.|'')*'|\"(?:[^\"\\]|\\.)*\"")
@@ -83,6 +91,34 @@ def _num(v):
         return 0.0
 
 
+def _parse_processlist(cols, rows, my_id, t):
+    """PROCESSLIST rows -> (all sessions, active sessions). Runs in the sampling thread."""
+    cols = [c.upper() for c in cols]
+    proc, active = [], []
+    for r in rows:
+        p = dict(zip(cols, r))
+        pid = p.get("ID")
+        if pid == my_id:
+            continue
+        cmd = p.get("COMMAND") or ""
+        elapsed = _num(p.get("TIME_MS")) / 1000 if p.get("TIME_MS") is not None else _num(p.get("TIME"))
+        info = p.get("INFO")
+        if isinstance(info, bytes):
+            info = info.decode("utf-8", "replace")
+        if info and len(info) > MAX_INFO:  # bulk INSERTs can be megabytes; samples keep up to an hour
+            info = info[:MAX_INFO]
+        rec = {"id": pid, "user": p.get("USER") or "", "host": _host_ip(p.get("HOST")), "db": p.get("DB") or "",
+               "cmd": cmd, "time": elapsed, "state": p.get("STATE") or "", "info": info or ""}
+        proc.append(rec)
+        if cmd not in IDLE_COMMANDS and rec["user"] not in ("system user", "event_scheduler"):
+            rec["wait"] = wait_class(cmd, rec["state"])
+            rec["digest"] = normalize_sql(info) if info else f"({cmd})"
+            rec["tables"] = tables_in(info, rec["db"])
+            rec["start"] = round(t - elapsed, 0)
+            active.append(rec)
+    return proc, active
+
+
 def _host_ip(host):
     host = host or ""
     if host.startswith("[") and "]" in host:
@@ -92,17 +128,42 @@ def _host_ip(host):
     return host or "(local)"
 
 
+class BarDelegate(QStyledItemDelegate):
+    """Draws a translucent bar behind a numeric cell, scaled to the column's largest value."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        model = index.model()
+        top = model.col_max.get(index.column()) if hasattr(model, "col_max") else None
+        value = model.rows[index.row()][index.column()] if top else None
+        if not isinstance(value, (int, float)) or value <= 0:
+            return
+        r = QRectF(option.rect).adjusted(2, 3, -2, -3)
+        r.setWidth(max(2.0, r.width() * min(1.0, value / top)))
+        col = QColor(T["accent"])
+        col.setAlpha(70)
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(col)
+        painter.drawRoundedRect(r, 2, 2)
+        painter.restore()
+
+
 class LiveModel(ResultModel):
     """Read-only model whose rows are replaced every tick, keeping the user's sort."""
 
-    def __init__(self, headers, rows=(), highlight=None):
+    def __init__(self, headers, rows=(), highlight=None, bar_cols=()):
         super().__init__(headers, rows)
         self._sort = None
         self.highlight = highlight  # fn(row) -> color token or None
+        self.bar_cols = tuple(bar_cols)
+        self.col_max = {}
 
     def set_rows(self, rows):
         self.beginResetModel()
         self.rows = [list(r) for r in rows]
+        self.col_max = {c: max((r[c] for r in self.rows if isinstance(r[c], (int, float))), default=0)
+                        for c in self.bar_cols}
         self.endResetModel()
         if self._sort:
             super().sort(*self._sort)
@@ -122,11 +183,15 @@ class LiveModel(ResultModel):
 class LiveGrid(DataGrid):
     """DataGrid that keeps column widths and the selected row (by key column) across refreshes."""
 
-    def __init__(self, headers, key_col=0, highlight=None):
+    def __init__(self, headers, key_col=0, highlight=None, bar_cols=()):
         super().__init__()
         self.key_col = key_col
-        self.live = LiveModel(headers, [], highlight)
+        self.live = LiveModel(headers, [], highlight, bar_cols)
         self.setModel(self.live)
+        if bar_cols:
+            self._bars = BarDelegate(self)
+            for c in bar_cols:
+                self.setItemDelegateForColumn(c, self._bars)
         self.setSortingEnabled(True)
         self.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self._sized = False
@@ -173,8 +238,10 @@ class Tile(QFrame):
     def set(self, value, sub="", level=None):
         self.val.setText(value)
         self.sub.setText(sub)
-        self.val.setStyleSheet("font-size: 16pt; font-weight: 600;"
-                               + (f" color: {T[level]};" if level else ""))
+        if level != getattr(self, "_level", None):  # restyling re-polishes the widget; skip when unchanged
+            self._level = level
+            self.val.setStyleSheet("font-size: 16pt; font-weight: 600;"
+                                   + (f" color: {T[level]};" if level else ""))
 
 
 class MonitorTab(QWidget):
@@ -209,7 +276,7 @@ class MonitorTab(QWidget):
         for label, sec in WINDOWS:
             self.window.addItem(f"Last {label}", sec)
         self.window.setCurrentIndex(1)
-        self.window.currentIndexChanged.connect(lambda *_: self._render())
+        self.window.currentIndexChanged.connect(self._window_changed)
         self.slice = QComboBox()
         for label, dim in SLICES:
             self.slice.addItem(f"Slice load by: {label}", dim)
@@ -255,7 +322,7 @@ class MonitorTab(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setObjectName("subtabs")
         self.g_top = LiveGrid(["Load (AAS)", "Load %", "Executions seen", "Max time (s)", "Database", "User",
-                               "Tables", "SQL digest", "Example"], key_col=7)
+                               "Tables", "SQL digest", "Example"], key_col=7, bar_cols=(0, 3))
         self.g_top.doubleClicked.connect(lambda *_: self._open_sql(self.g_top, 8, 4))
         self.tabs.addTab(self._page(self.g_top, [
             muted("Sampled from live sessions — works on every server. Double-click to open in a query tab."),
@@ -263,7 +330,7 @@ class MonitorTab(QWidget):
                        "Explain")]), icons.icon("chart"), "Top SQL")
 
         self.g_sess = LiveGrid(["Id", "User", "Application (host)", "Database", "Command", "Time (s)", "Wait",
-                                "State", "Query"], highlight=self._sess_color)
+                                "State", "Query"], highlight=self._sess_color, bar_cols=(5,))
         self.g_sess.doubleClicked.connect(lambda *_: self._open_sql(self.g_sess, 8, 3))
         self.show_idle = QCheckBox("Show idle (Sleep) connections")
         self.show_idle.toggled.connect(lambda *_: self._render_sessions())
@@ -277,14 +344,14 @@ class MonitorTab(QWidget):
 
         self.g_apps = LiveGrid(["Application (host)", "User", "Databases", "Connections", "Active", "Idle",
                                 "Longest idle (s)", "Longest query (s)", "Load share %", "Note"],
-                               highlight=lambda r: "warning" if r[9] else None)
+                               highlight=lambda r: "warning" if r[9] else None, bar_cols=(3, 8))
         self.tabs.addTab(self._page(self.g_apps, [
             muted("Every client (web app, API, cron, tool) grouped by host and user. "
                   "Many long-idle connections usually mean the app is not closing or pooling them.")]),
             icons.icon("users"), "Connections by app")
 
         self.g_tables = LiveGrid(["Table", "Load (AAS)", "Load %", "Statements seen", "Reads", "Writes",
-                                  "Wait time (s)", "Source"])
+                                  "Wait time (s)", "Source"], bar_cols=(1, 6))
         self.tabs.addTab(self._page(self.g_tables, [
             muted("Tables touched by active statements (sampled). With performance_schema: real read/write I/O.")]),
             icons.icon("table"), "Hot tables")
@@ -292,7 +359,7 @@ class MonitorTab(QWidget):
         self.g_digest = LiveGrid(["Database", "Statement digest", "Calls", "Total time (s)", "Avg (ms)",
                                   "Max (ms)", "Rows examined", "Rows sent", "Examined / sent", "No index used",
                                   "Tmp disk tables", "Last seen"], key_col=1,
-                                 highlight=lambda r: "warning" if r[9] else None)
+                                 highlight=lambda r: "warning" if r[9] else None, bar_cols=(3, 4))
         self.g_digest.doubleClicked.connect(lambda *_: self._open_sql(self.g_digest, 1, 0))
         self.digest_since = QCheckBox("Only since monitoring started")
         self.digest_since.setChecked(True)
@@ -304,11 +371,26 @@ class MonitorTab(QWidget):
         self.health = QTextBrowser()
         self.health.setOpenLinks(False)
         self.health.anchorClicked.connect(self._health_action)
+        self.health_loader = LoadingOverlay(self.health, "Running health checks…")
         self.tabs.addTab(self._page(self.health, [tool("refresh", "Run the health checks again",
                                                        self.run_health, "Run checks"), None,
                                                   muted("Recommendations based on server status and settings")]),
                          icons.icon("check"), "Health advisor")
-        self.tabs.currentChanged.connect(lambda *_: self._render_tables())
+
+        self.g_errors = LiveGrid(["Time", "Priority", "Code", "Subsystem", "Message"], key_col=0,
+                                 highlight=lambda r: {"Error": "danger", "Warning": "warning"}.get(r[1]))
+        self.err_prio = QComboBox()
+        for label, prios in ERROR_PRIOS:
+            self.err_prio.addItem(label, prios)
+        self.err_prio.setCurrentIndex(1)
+        self.err_prio.currentIndexChanged.connect(lambda *_: self.load_errors())
+        self.err_note = muted("")
+        self.err_note.setWordWrap(True)
+        self.err_loader = LoadingOverlay(self.g_errors, "Reading the server error log…")
+        self.tabs.addTab(self._page(self.g_errors, [
+            self.err_prio, tool("refresh", "Read the error log again", self.load_errors, "Refresh"), "|",
+            self.err_note]), icons.icon("log"), "Error log")
+        self.tabs.currentChanged.connect(self._tab_changed)
         body.addWidget(self.tabs)
         body.setSizes([470, 330])
         lay.addWidget(body, 1)
@@ -343,6 +425,8 @@ class MonitorTab(QWidget):
         super().showEvent(e)
         if self.session and not self.timer.isActive() and not self.samples:
             self.start()
+        elif getattr(self, "_stale", False):
+            self._render()
 
     def toggle(self):
         self.stop() if self.timer.isActive() else self.start()
@@ -377,6 +461,17 @@ class MonitorTab(QWidget):
             self.conn.close()
             self.conn = None
 
+    def _window_changed(self, *_):
+        self._render()
+        if self.tabs.currentWidget() is self.g_errors.parentWidget():
+            self.load_errors()
+
+    def _tab_changed(self, *_):
+        if self.tabs.currentWidget() is self.g_errors.parentWidget():
+            self.load_errors()
+        else:
+            self._render_tables()
+
     def clear(self):
         self.samples.clear()
         self.prev = None
@@ -400,8 +495,8 @@ class MonitorTab(QWidget):
                 out = {"t": time.time()}
                 out["status"] = {k: v for k, v in conn.rows("SHOW GLOBAL STATUS")}
                 cols, rows, _ = conn.query("SELECT * FROM information_schema.PROCESSLIST", log=False)
-                out["proc"] = [dict(zip([c.upper() for c in cols], r)) for r in rows]
-                out["my_id"] = conn.thread_id()
+                # Parse here, off the UI thread: the SQL normalising regexes are the costly part of a tick.
+                out["proc"], out["active"] = _parse_processlist(cols, rows, conn.thread_id(), out["t"])
                 if need_vars:
                     out["vars"] = {k: v for k, v in conn.rows("SHOW GLOBAL VARIABLES")}
                 if want_digest:
@@ -425,10 +520,22 @@ class MonitorTab(QWidget):
             if self.conn:
                 self.conn.close()
 
-        run_async(work, self._ingest, failed)
+        run_async(work, self._ingest, failed, quiet=True)
 
     def _ingest(self, raw):
         self._busy = False
+        try:
+            self._ingest_sample(raw)
+        except Exception as exc:  # noqa: BLE001 - would otherwise repeat on every tick
+            self.stop()
+            self.alert.setText(f"Monitoring stopped: {type(exc).__name__}: {str(exc)[:100]}")
+            try:
+                with open(f"{data_dir()}/error.log", "a", encoding="utf-8") as f:
+                    f.write("Monitor sample failed:\n" + traceback.format_exc() + "\n")
+            except OSError:
+                pass
+
+    def _ingest_sample(self, raw):
         if raw.get("vars"):
             first = not self.vars
             self.vars = raw["vars"]
@@ -437,40 +544,18 @@ class MonitorTab(QWidget):
                 QTimer.singleShot(0, self.run_health)
         st = raw["status"]
         t = raw["t"]
-        my_id = raw["my_id"]
-        active, proc = [], []
-        for p in raw["proc"]:
-            pid = p.get("ID")
-            cmd = p.get("COMMAND") or ""
-            elapsed = _num(p.get("TIME_MS")) / 1000 if p.get("TIME_MS") is not None else _num(p.get("TIME"))
-            info = p.get("INFO")
-            if isinstance(info, bytes):
-                info = info.decode("utf-8", "replace")
-            rec = {"id": pid, "user": p.get("USER") or "", "host": _host_ip(p.get("HOST")), "db": p.get("DB") or "",
-                   "cmd": cmd, "time": elapsed, "state": p.get("STATE") or "", "info": info or ""}
-            if pid == my_id:
-                continue
-            proc.append(rec)
-            if cmd not in IDLE_COMMANDS and rec["user"] not in ("system user", "event_scheduler"):
-                rec["wait"] = wait_class(cmd, rec["state"])
-                rec["digest"] = normalize_sql(info) if info else f"({cmd})"
-                rec["start"] = round(t - elapsed, 0)
-                active.append(rec)
-        self.latest_proc = proc
+        active = raw["active"]
+        self.latest_proc = raw["proc"]
 
-        rates = {}
+        rates, dt = {}, 0.0
         if self.prev:
             dt = max(0.001, t - self.prev["t"])
             ps = self.prev["status"]
-            for k in ("Questions", "Com_select", "Com_insert", "Com_update", "Com_delete", "Com_replace",
-                      "Bytes_received", "Bytes_sent", "Slow_queries", "Connections", "Aborted_connects",
-                      "Innodb_buffer_pool_read_requests", "Innodb_buffer_pool_reads", "Innodb_rows_read",
-                      "Handler_read_rnd_next", "Created_tmp_disk_tables", "Select_full_join"):
+            for k in RATE_KEYS:
                 rates[k] = max(0.0, (_num(st.get(k)) - _num(ps.get(k))) / dt)
         self.prev = {"t": t, "status": st}
-        self.samples.append({"t": t, "active": active, "rates": rates,
-                             "connected": _num(st.get("Threads_connected")),
-                             "running": len(active)})
+        self.samples.append({"t": t, "dt": dt, "active": active, "rates": rates,
+                             "connected": _num(st.get("Threads_connected")), "running": len(active)})
         if "digest" in raw:
             if self.digest_base is None:
                 self.digest_base = {(r[0], r[10]): r for r in raw["digest"]}
@@ -486,6 +571,10 @@ class MonitorTab(QWidget):
         return [s for s in self.samples if s["t"] >= cutoff]
 
     def _render(self):
+        if not self.isVisible():  # keep sampling in the background, draw only when someone is looking
+            self._stale = True
+            return
+        self._stale = False
         win = self._window()
         self._render_tiles(win)
         self._render_charts(win)
@@ -511,7 +600,7 @@ class MonitorTab(QWidget):
         self.t_qps.set(f"{r.get('Questions', 0):,.0f}" if r else "…",
                        f"sel {r.get('Com_select', 0):,.0f} · wr "
                        f"{r.get('Com_insert', 0) + r.get('Com_update', 0) + r.get('Com_delete', 0):,.0f}" if r else "")
-        slow_win = sum(s["rates"].get("Slow_queries", 0) * self.interval.currentData() for s in win)
+        slow_win = sum(s["rates"].get("Slow_queries", 0) * s["dt"] for s in win)
         lqt = _num(self.vars.get("long_query_time"))
         self.t_slow.set(f"{slow_win:,.0f}", f"in window · > {lqt:g} s · total {_num(st.get('Slow_queries')):,.0f}",
                         "warning" if slow_win else None)
@@ -591,7 +680,7 @@ class MonitorTab(QWidget):
             for a in s["active"]:
                 total += 1
                 d = agg.setdefault(a["digest"], {"n": 0, "execs": set(), "max": 0.0, "db": Counter(),
-                                                 "user": Counter(), "ex": a["info"]})
+                                                 "user": Counter(), "ex": a["info"], "tables": a["tables"]})
                 d["n"] += 1
                 d["execs"].add((a["id"], a["start"]))
                 d["max"] = max(d["max"], a["time"])
@@ -601,7 +690,7 @@ class MonitorTab(QWidget):
         for dig, d in sorted(agg.items(), key=lambda kv: -kv[1]["n"]):
             rows.append([round(d["n"] / n, 3), round(100 * d["n"] / max(1, total), 1), len(d["execs"]),
                          round(d["max"], 1), d["db"].most_common(1)[0][0], d["user"].most_common(1)[0][0],
-                         ", ".join(sorted(tables_in(d["ex"], ""))[:4]), dig, d["ex"]])
+                         ", ".join(sorted(d["tables"])[:4]), dig, d["ex"]])
         self.g_top.set_rows(rows[:200])
 
     def _sess_color(self, row):
@@ -667,7 +756,7 @@ class MonitorTab(QWidget):
         total = 0
         for s in win:
             for a in s["active"]:
-                for tb in tables_in(a["info"], a["db"]):
+                for tb in a["tables"]:
                     load[tb] += 1
                     stmts[tb].add((a["id"], a["start"]))
                     total += 1
@@ -706,6 +795,49 @@ class MonitorTab(QWidget):
                          str(last or "")])
         rows.sort(key=lambda x: -x[3])
         self.g_digest.set_rows(rows)
+
+    def load_errors(self):
+        if not self.session:
+            return
+        conn = self.conn or self.session.conn
+        seconds = int(self.window.currentData())
+        prios = self.err_prio.currentData()
+        sql = ("SELECT LOGGED, PRIO, ERROR_CODE, SUBSYSTEM, DATA FROM performance_schema.error_log "
+               "WHERE LOGGED >= NOW(6) - INTERVAL %s SECOND"
+               + (f" AND PRIO IN ({', '.join(['%s'] * len(prios))})" if prios else "")
+               + " ORDER BY LOGGED DESC LIMIT 2000")
+
+        def work():
+            with conn.lock:
+                try:
+                    return "ok", conn.rows(sql, (seconds, *prios))
+                except Exception as exc:  # noqa: BLE001 - explained below instead of raised
+                    path = conn.rows("SELECT @@log_error")
+                    return "unavailable", (str(exc), path[0][0] if path else "")
+
+        def done(res):
+            self.err_loader.stop()
+            kind, data = res
+            label = self.window.currentText().lower()
+            if kind == "ok":
+                self.g_errors.set_rows([[str(t), p, c, sub, msg] for t, p, c, sub, msg in data])
+                self.err_note.setText(f"{len(data):,} message(s) in the {label}"
+                                      + (" (newest 2,000 shown)" if len(data) >= 2000 else "")
+                                      + " · read from performance_schema.error_log")
+            else:
+                self.g_errors.set_rows([])
+                reason, path = data
+                self.err_note.setText(
+                    "This server can't show its error log over SQL (needs MySQL 8.0.22+ and SELECT on "
+                    "performance_schema.error_log; MariaDB doesn't have it)."
+                    + (f" The log file is {path} on the server." if path else "") + f"  [{reason[:120]}]")
+
+        def failed(e):
+            self.err_loader.stop()
+            self.err_note.setText(e.splitlines()[0][:200])
+
+        self.err_loader.start()
+        run_async(work, done, failed)
 
     def _update_ps_label(self):
         if not self.session:
@@ -773,9 +905,12 @@ class MonitorTab(QWidget):
                 return extra
 
         def done(extra):
+            self.health_loader.stop()
             self.health_extra = extra
             self._render_health()
-        run_async(work, done, lambda e: self.health.setHtml(f"<p>Could not run checks: {e}</p>"))
+        self.health_loader.start()
+        run_async(work, done, lambda e: (self.health_loader.stop(),
+                                         self.health.setHtml(f"<p>Could not run checks: {e}</p>")))
 
     def _render_health(self):
         v = self.vars

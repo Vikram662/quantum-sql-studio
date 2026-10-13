@@ -18,7 +18,7 @@ def color(i):
 
 def nice_max(v):
     """Round an axis maximum up to 1, 2, 2.5 or 5 × 10^n."""
-    if v <= 0:
+    if not math.isfinite(v) or v <= 0:
         return 1
     exp = 10 ** math.floor(math.log10(v))
     for m in (1, 2, 2.5, 5, 10):
@@ -48,6 +48,15 @@ class _Base(QWidget):
         self._title_font = QFont(self.font())
         self._title_font.setPointSizeF(9)
         self._title_font.setBold(True)
+
+    def paintEvent(self, _e):
+        # Always end the painter: one left active after an exception (e.g. while the error dialog opens
+        # mid-paint) is a hard crash on Linux/X11.
+        p = QPainter(self)
+        try:
+            self._paint(p)
+        finally:
+            p.end()
 
     def _frame(self, p):
         p.setRenderHint(QPainter.Antialiasing)
@@ -101,8 +110,7 @@ class TimeSeriesChart(_Base):
     def _plot_rect(self):
         return QRectF(46, 30, max(10, self.width() - 58), max(10, self.height() - 52))
 
-    def paintEvent(self, _e):
-        p = QPainter(self)
+    def _paint(self, p):
         self._frame(p)
         plot = self._plot_rect()
         n = len(self.times)
@@ -229,8 +237,7 @@ class CategoryChart(_Base):
             self.mode = mode
         self.update()
 
-    def paintEvent(self, _e):
-        p = QPainter(self)
+    def _paint(self, p):
         self._frame(p)
         self._hits = []
         if not self.labels or not self.series:

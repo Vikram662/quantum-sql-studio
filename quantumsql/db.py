@@ -3,6 +3,7 @@ import datetime
 import decimal
 import inspect
 import re
+import ssl
 import threading
 import time
 
@@ -231,8 +232,14 @@ class DbConnection:
                 local_infile=False, client_flag=CLIENT.FOUND_ROWS)
             self.server_version = self.conn.get_server_info()
             via = f" via SSH {p.get('ssh_user')}@{p.get('ssh_host')}" if p.get("ssh_enabled") else ""
+            if isinstance(self.conn._sock, ssl.SSLSocket):
+                secure = ", TLS encrypted"
+            elif p.get("ssh_enabled"):
+                secure = ", encrypted by the SSH tunnel"
+            else:
+                secure = ", NOT encrypted — the server has no TLS; use an SSH tunnel over untrusted networks"
             query_log.message.emit(f"Connected to {p.get('user')}@{p.get('host')}:{p.get('port')}{via} "
-                                   f"(server {self.server_version})", "info")
+                                   f"(server {self.server_version}{secure})", "info")
 
     def close(self):
         if self.conn:
@@ -427,12 +434,27 @@ class _Worker(QRunnable):
             self.signals.done.emit(result)
 
 
+class _Activity(QObject):
+    """Number of background tasks in flight, for the status-bar busy indicator."""
+    changed = Signal(int)
+
+    def __init__(self):
+        super().__init__()
+        self.count = 0
+
+    def add(self, n):
+        self.count = max(0, self.count + n)
+        self.changed.emit(self.count)
+
+
+activity = _Activity()
 _alive = set()
 
 
-def run_async(fn, on_done=None, on_error=None, on_progress=None):
+def run_async(fn, on_done=None, on_error=None, on_progress=None, quiet=False):
     """Run fn in the thread pool. If fn takes an argument it receives a Task.
-    Returns the Task (or None) so callers can cancel."""
+    Returns the Task (or None) so callers can cancel. quiet=True keeps periodic
+    polling out of the global busy indicator."""
     signals = _Signals()
     try:
         wants_task = len(inspect.signature(fn).parameters) >= 1
@@ -448,6 +470,10 @@ def run_async(fn, on_done=None, on_error=None, on_progress=None):
     _alive.add(signals)
     signals.done.connect(lambda *_: _alive.discard(signals))
     signals.error.connect(lambda *_: _alive.discard(signals))
+    if not quiet:
+        activity.add(1)
+        signals.done.connect(lambda *_: activity.add(-1))
+        signals.error.connect(lambda *_: activity.add(-1))
     QThreadPool.globalInstance().start(_Worker(fn, signals, task))
     return task
 
