@@ -49,6 +49,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: docs/RELEASE_NOTES.md
           files: |
             Output/*.exe
             dist/*.dmg

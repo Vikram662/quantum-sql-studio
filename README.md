@@ -43,6 +43,12 @@ End-user documentation: [docs/USER_GUIDE.md](docs/USER_GUIDE.md) (also in the ap
 
 User data is stored in `%APPDATA%\QuantumSQL\` on Windows, `~/Library/Application Support/QuantumSQL/` on macOS and `~/.config/QuantumSQL/` on Linux.
 
+## Download and first run
+Get the installer for your system from [Releases](https://github.com/Vikram662/quantum-sql-studio/releases). The downloads are not code-signed yet, so the first launch shows a warning:
+- **Windows**: on "Windows protected your PC", click **More info**, then **Run anyway**.
+- **macOS**: on "cannot be opened" or "cannot verify the developer", open **System Settings → Privacy & Security** and click **Open Anyway**, or run `xattr -dr com.apple.quarantine "/Applications/Quantum SQL.app"` once.
+- **Linux**: no warning. Extract the .tar.gz and run `QuantumSQL/QuantumSQL` (needs `libxcb-cursor0`).
+
 ## Run from source
 ```
 pip install -r requirements.txt
