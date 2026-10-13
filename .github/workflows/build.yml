@@ -15,7 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, macos-13, ubuntu-22.04]
+        # macos-latest is Apple Silicon; GitHub retired the Intel macos-13 runners, so jobs on it never start.
+        os: [windows-latest, macos-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
