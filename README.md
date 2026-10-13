@@ -74,3 +74,15 @@ Or push a tag such as `v2.1.0` to GitHub. `.github/workflows/build.yml` builds t
 
 ## License
 Quantum SQL is free and open source under the [MIT License](LICENSE). It bundles third-party open source components, listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+## Code signing policy
+Windows builds are being set up for signing through the SignPath Foundation (application pending). Once approved: free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Every signed file is built by GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)) from the source in this repository.
+- Team roles:
+  - Authors and committers: [Vikram662](https://github.com/Vikram662)
+  - Reviewers (review every pull request from outside contributors): [Vikram662](https://github.com/Vikram662)
+  - Approvers (approve every signing request by hand): [Vikram662](https://github.com/Vikram662)
+
+### Privacy
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. It connects only to the database servers (and SSH hosts) the user configures. The optional AI assistant sends the user's question and the related schema to the AI provider the user picked, with the user's own API key, and only when the user asks it something. There is no telemetry, analytics or update check. Saved connections and settings stay on the user's computer, with passwords and API keys encrypted.
