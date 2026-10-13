@@ -278,7 +278,7 @@ class MainWindow(QMainWindow):
         for a in (self.a_sessions, self.a_disconnect, None, self.a_refresh, None, self.a_new_query, self.a_open,
                   self.a_save, None, self.a_run, self.a_run_cur, self.a_explain, self.a_stop, None,
                   self.a_create_db, self.a_create_table, None, self.a_import, self.a_export, None,
-                  self.a_monitor, self.a_processes, self.a_users):
+                  self.a_monitor, self.a_processes, self.a_users, None, self.a_ai):
             tb.addSeparator() if a is None else tb.addAction(a)
         self.addToolBar(tb)
 
