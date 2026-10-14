@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Signing Policy - Quantum SQL</title>
+<meta name="description" content="Code signing policy for Quantum SQL releases.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="./">Quantum SQL</a>
+  <nav>
+    <a href="./">Home</a>
+    <a href="https://github.com/Vikram662/quantum-sql-studio/releases">Download</a>
+    <a href="https://github.com/Vikram662/quantum-sql-studio">Source code</a>
+    <a href="privacy.html">Privacy</a>
+    <a href="terms.html">Terms</a>
+    <a href="code-signing.html">Code signing policy</a>
+  </nav>
+</header>
+<main>
+  <h1>Code Signing Policy</h1>
+  <p>Windows builds are being set up for signing through the SignPath Foundation (application pending). Once approved: free code signing provided by <a href="https://about.signpath.io/">SignPath.io</a>, certificate by <a href="https://signpath.org/">SignPath Foundation</a>.</p>
+
+  <h2>What is signed</h2>
+  <ul>
+    <li>Only release binaries of this project: the Windows installer and the application executable published on the <a href="https://github.com/Vikram662/quantum-sql-studio/releases">Releases page</a>.</li>
+    <li>Every signed file is built by GitHub Actions (<a href="https://github.com/Vikram662/quantum-sql-studio/blob/main/.github/workflows/build.yml"><code>.github/workflows/build.yml</code></a>) from the source code in the <a href="https://github.com/Vikram662/quantum-sql-studio">public repository</a>. Nothing built on a personal machine is signed.</li>
+    <li>Third-party components bundled in the installer are open source and listed in <a href="https://github.com/Vikram662/quantum-sql-studio/blob/main/THIRD_PARTY_NOTICES.txt">THIRD_PARTY_NOTICES.txt</a>.</li>
+  </ul>
+
+  <h2>Team roles</h2>
+  <ul>
+    <li>Authors and committers: <a href="https://github.com/Vikram662">Vikram662</a></li>
+    <li>Reviewers (review every pull request from outside contributors): <a href="https://github.com/Vikram662">Vikram662</a></li>
+    <li>Approvers (approve every signing request by hand): <a href="https://github.com/Vikram662">Vikram662</a></li>
+  </ul>
+
+  <h2>Privacy</h2>
+  <p>This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. See the <a href="privacy.html">privacy policy</a>.</p>
+</main>
+<footer>
+  Quantum SQL is free and open source under the <a href="https://github.com/Vikram662/quantum-sql-studio/blob/main/LICENSE">MIT License</a>. &copy; 2026 Vikram Singh Rathore.
+</footer>
+</body>
+</html>
