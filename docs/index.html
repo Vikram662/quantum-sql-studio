@@ -5,44 +5,130 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quantum SQL</title>
 <meta name="description" content="Free, open source desktop client for MySQL and MariaDB on Windows, macOS and Linux.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E%3Crect width='28' height='28' rx='7' fill='%232446c8'/%3E%3Cellipse cx='14' cy='9' rx='7' ry='3' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M7 9v10c0 1.7 3.1 3 7 3s7-1.3 7-3V9M7 14c0 1.7 3.1 3 7 3s7-1.3 7-3' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;600;700;800&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <a class="brand" href="./">Quantum SQL</a>
-  <nav>
-    <a href="./">Home</a>
-    <a href="https://github.com/Vikram662/quantum-sql-studio/releases">Download</a>
-    <a href="https://github.com/Vikram662/quantum-sql-studio">Source code</a>
-    <a href="privacy.html">Privacy</a>
-    <a href="terms.html">Terms</a>
-    <a href="code-signing.html">Code signing policy</a>
-  </nav>
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#2446c8"/><ellipse cx="14" cy="9" rx="7" ry="3" fill="none" stroke="#fff" stroke-width="2"/><path d="M7 9v10c0 1.7 3.1 3 7 3s7-1.3 7-3V9M7 14c0 1.7 3.1 3 7 3s7-1.3 7-3" fill="none" stroke="#fff" stroke-width="2"/></svg>
+      Quantum SQL
+    </a>
+    <nav aria-label="Main">
+      <a href="#features">Features</a>
+      <a href="https://github.com/Vikram662/quantum-sql-studio/blob/main/docs/USER_GUIDE.md">User guide</a>
+      <a href="https://github.com/Vikram662/quantum-sql-studio">Source code</a>
+      <a href="https://github.com/Vikram662/quantum-sql-studio/releases">Download</a>
+    </nav>
+  </div>
 </header>
+
 <main>
-  <h1>Quantum SQL</h1>
-  <p>A free, open source desktop client for MySQL and MariaDB, in the style of HeidiSQL and MySQL Workbench, for Windows, macOS and Linux. Built with Python, PySide6 (Qt) and PyMySQL.</p>
-  <p><a class="button" href="https://github.com/Vikram662/quantum-sql-studio/releases">Download the latest release</a></p>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <h1>The MySQL client that stops you before you break production.</h1>
+        <p class="lede">Quantum SQL is a free desktop client for MySQL and MariaDB. Browse, edit, query and monitor your databases, with safety checks that catch risky statements before they run.</p>
+        <div class="actions">
+          <a class="btn" href="https://github.com/Vikram662/quantum-sql-studio/releases">Download for free</a>
+          <a class="quiet" href="https://github.com/Vikram662/quantum-sql-studio">View the source on GitHub</a>
+        </div>
+        <p class="meta">Windows, macOS and Linux. Open source under the MIT License.</p>
+      </div>
 
-  <h2>Features</h2>
-  <ul>
-    <li>Session manager with saved, encrypted connections and SSH tunnels.</li>
-    <li>Object tree, table designer, inline data editing with undo, and query tabs with syntax highlighting and autocomplete.</li>
-    <li>SQL dump export and import; grid export to CSV, Excel, JSON, SQL, Markdown and HTML.</li>
-    <li>Live monitor, Top SQL, active sessions and a health advisor.</li>
-    <li>Safety features: environment tags, safe mode for destructive statements, and safe transactions.</li>
-    <li>Visual Explain with an index advisor, schema compare and sync, ER diagrams, code and test data generators.</li>
-    <li>Optional AI assistant that writes and explains SQL using the provider and API key you choose.</li>
-  </ul>
+      <figure class="window" aria-label="Quantum SQL query tab warning about a DELETE without a WHERE clause" style="margin:0">
+        <div class="chrome">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="tab">Query 1</span>
+          <span class="env">Production</span>
+        </div>
+<pre><span class="ln">1</span><span class="cm">-- clean up test orders</span>
+<span class="ln">2</span><span class="kw">DELETE FROM</span> orders
+<span class="ln">3</span><span class="cm">-- WHERE status = <span class="str">'test'</span></span>
+<span class="ln">4</span>;</pre>
+        <div class="guard" role="img" aria-label="Safe mode warning">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3Z" fill="none" stroke="#2b2200" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v5M12 18v.01" stroke="#2b2200" stroke-width="2" stroke-linecap="round"/></svg>
+          <strong>DELETE without WHERE</strong>
+          <span>This will delete about 48,213 rows from <b>orders</b> on a production server.</span>
+          <div class="choices"><b>Cancel</b><b>Run anyway</b></div>
+        </div>
+      </figure>
+    </div>
+  </section>
 
-  <h2>Documentation</h2>
-  <p>See the <a href="https://github.com/Vikram662/quantum-sql-studio/blob/main/docs/USER_GUIDE.md">user guide</a> and the <a href="https://github.com/Vikram662/quantum-sql-studio#readme">README</a>.</p>
+  <section class="band" id="features">
+    <div class="wrap">
+      <h2>Everything you open a database client for</h2>
+      <p>One app for day-to-day work, performance checks and schema changes, in the style of HeidiSQL and MySQL Workbench.</p>
 
-  <h2>Support</h2>
-  <p>Report bugs and ask questions in <a href="https://github.com/Vikram662/quantum-sql-studio/issues">GitHub Issues</a>.</p>
+      <div class="groups">
+        <div class="group">
+          <h3>Browse and edit<small>Your data, without writing SQL</small></h3>
+          <ul>
+            <li><b>Saved connections</b> with colour tags, encrypted passwords and SSH tunnels</li>
+            <li><b>Object tree</b> for databases, tables, views, procedures and triggers</li>
+            <li><b>Inline editing</b> that saves when you leave the cell, with undo</li>
+            <li><b>Table designer</b> with an SQL preview before anything is saved</li>
+          </ul>
+        </div>
+        <div class="group">
+          <h3>Write queries<small>Fast, with help when you need it</small></h3>
+          <ul>
+            <li><b>Autocomplete</b> for tables and columns, snippets and query parameters</li>
+            <li><b>Visual Explain</b> with an index advisor</li>
+            <li><b>AI assistant</b> that writes and explains SQL, using your own API key</li>
+            <li><b>Export</b> results to CSV, Excel, JSON, SQL, Markdown or HTML</li>
+          </ul>
+        </div>
+        <div class="group">
+          <h3>Stay safe<small>Mistakes are caught before they run</small></h3>
+          <ul>
+            <li><b>Environment tags</b>: production sessions are red and ask before every write</li>
+            <li><b>Safe mode</b> for UPDATE or DELETE without WHERE, DROP and TRUNCATE</li>
+            <li><b>Safe transactions</b>: review the result, then commit or roll back</li>
+            <li><b>Dumps and imports</b> to .sql, .sql.gz or .zip with a progress bar</li>
+          </ul>
+        </div>
+        <div class="group">
+          <h3>Monitor and tune<small>See what the server is doing</small></h3>
+          <ul>
+            <li><b>Live monitor</b> of active sessions, queries per second and slow queries</li>
+            <li><b>Top SQL</b> with per-statement timings</li>
+            <li><b>Health advisor</b> for buffer pool, missing keys, lock waits and more</li>
+            <li><b>Schema compare</b>, ER diagrams and code generators</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <h2>Download</h2>
+      <p>Get the latest version from <a href="https://github.com/Vikram662/quantum-sql-studio/releases">GitHub Releases</a>. Every installer is built by GitHub Actions from the public source code.</p>
+      <div class="platforms">
+        <div class="platform"><h3>Windows</h3><p>Installer (.exe). Upgrades an existing install in place.</p></div>
+        <div class="platform"><h3>macOS</h3><p>Disk image (.dmg) for Apple Silicon and Intel.</p></div>
+        <div class="platform"><h3>Linux</h3><p>Archive (.tar.gz). Extract and run; needs libxcb-cursor0.</p></div>
+      </div>
+    </div>
+  </section>
 </main>
-<footer>
-  Quantum SQL is free and open source under the <a href="https://github.com/Vikram662/quantum-sql-studio/blob/main/LICENSE">MIT License</a>. &copy; 2026 Vikram Singh Rathore.
+
+<footer class="footer">
+  <div class="wrap">
+    <span>&copy; 2026 Vikram Singh Rathore. Free and open source under the <a href="https://github.com/Vikram662/quantum-sql-studio/blob/main/LICENSE">MIT License</a>.</span>
+    <nav aria-label="Legal">
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="code-signing.html">Code signing policy</a>
+      <a href="https://github.com/Vikram662/quantum-sql-studio/issues">Report an issue</a>
+    </nav>
+  </div>
 </footer>
 </body>
 </html>
