@@ -52,70 +52,99 @@ def to_text(value):
 
 
 # ── Statement splitter (handles quotes, comments and DELIMITER) ────────────
-def split_sql(sql):
-    """Return a list of (statement, start, end) tuples."""
-    out = []
+_NON_SPACE = re.compile(r"\S")
+# A whole quoted string in one match: backslash escapes and doubled quotes, may run to the
+# end of the text. Written as "unrolled loops", which Python's re runs much faster than (a|b)*.
+_QUOTED = (r"""'[^'\\]*(?:(?:\\[\s\S]?|'')[^'\\]*)*'?"""
+           r'''|"[^"\\]*(?:(?:\\[\s\S]?|"")[^"\\]*)*"?'''
+           r"""|`[^`]*(?:``[^`]*)*`?""")
+_TOKEN_CACHE = {}
+
+
+def _token_re(delim):
+    """Next spot the splitter must handle: DELIMITER, the delimiter, a quoted string or a comment."""
+    pat = _TOKEN_CACHE.get(delim)
+    if pat is None:
+        pat = _TOKEN_CACHE[delim] = re.compile(
+            r"(?i:DELIMITER[ \t])|" + re.escape(delim) + "|" + _QUOTED + r"|#|--|/\*")
+    return pat
+
+
+def iter_sql(sql):
+    """Yield (statement, start, end) tuples one at a time.
+
+    Jumps between quotes, comments and delimiters with regex searches instead of
+    walking every character, so large dumps split fast and an import can start
+    running statements before the whole file is parsed."""
     n = len(sql)
     delim = ";"
+    token = _token_re(delim)
     i = start = 0
     has_code = False
-    quote = None
-
-    def flush(end):
-        text = sql[start:end].strip()
-        if has_code and text:
-            out.append((text, start, end))
 
     while i < n:
-        c = sql[i]
-        if quote:
-            if c == "\\" and quote != "`":
-                i += 2
-                continue
-            if c == quote:
-                if i + 1 < n and sql[i + 1] == quote:
-                    i += 2
-                    continue
-                quote = None
-            i += 1
-            continue
+        m = token.search(sql, i)
+        pos = m.start() if m else n
+        if not has_code and _NON_SPACE.search(sql, i, pos):
+            has_code = True
+        if not m:
+            break
+        tok = m.group()
+        c = tok[0]
 
-        if c in "dD" and sql[i:i + 10].upper() in ("DELIMITER ", "DELIMITER\t"):
-            line_start = sql.rfind("\n", 0, i) + 1
-            if not sql[line_start:i].strip():
-                flush(line_start)
-                eol = sql.find("\n", i)
+        if c in "dD" and len(tok) == 10 and tok[:9].upper() == "DELIMITER":  # only at the start of a line
+            line_start = sql.rfind("\n", 0, pos) + 1
+            if not sql[line_start:pos].strip():
+                text = sql[start:line_start].strip()
+                if has_code and text:
+                    yield text, start, line_start
+                eol = sql.find("\n", pos)
                 eol = n if eol < 0 else eol
-                parts = sql[i + 10:eol].split()
+                parts = sql[pos + 10:eol].split()
                 if parts:
                     delim = parts[0]
+                    token = _token_re(delim)
                 i = start = eol
                 has_code = False
                 continue
-        if sql.startswith(delim, i):
-            flush(i)
-            i += len(delim)
-            start = i
+            if not sql.startswith(delim, pos):
+                has_code = True
+                i = pos + 1
+                continue
+            tok = delim
+        if tok == delim:
+            text = sql[start:pos].strip()
+            if has_code and text:
+                yield text, start, pos
+            i = start = pos + len(delim)
             has_code = False
             continue
         if c in "'\"`":
-            quote = c
             has_code = True
-        elif c == "#" or (c == "-" and sql.startswith("--", i) and (i + 2 >= n or sql[i + 2] in " \t\r\n")):
-            eol = sql.find("\n", i)
+            i = m.end()
+            continue
+        if c == "#" or (tok == "--" and (pos + 2 >= n or sql[pos + 2] in " \t\r\n")):
+            eol = sql.find("\n", pos)
             i = n if eol < 0 else eol + 1
             continue
-        elif sql.startswith("/*", i):
-            end = sql.find("*/", i + 2)
-            if sql.startswith("/*!", i):
-                has_code = True
-            i = n if end < 0 else end + 2
-            continue
-        elif not c.isspace():
+        if tok == "--":  # "--" not followed by whitespace is code, e.g. 5--3
             has_code = True
-        i += 1
-    flush(n)
-    return out
+            i = pos + 1
+            continue
+        # /* comment */; /*! ... */ is executable on MySQL
+        end = sql.find("*/", pos + 2)
+        if sql.startswith("/*!", pos):
+            has_code = True
+        i = n if end < 0 else end + 2
+
+    text = sql[start:n].strip()
+    if has_code and text:
+        yield text, start, n
+
+
+def split_sql(sql):
+    """Return a list of (statement, start, end) tuples."""
+    return list(iter_sql(sql))
 
 
 _WRITE_KINDS = {"INSERT", "UPDATE", "DELETE", "REPLACE", "MERGE", "LOAD", "CALL"}

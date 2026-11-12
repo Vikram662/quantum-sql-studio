@@ -8,7 +8,7 @@ import zipfile
 import pymysql
 
 from . import APP_NAME, APP_VERSION
-from .db import literal, qi, qt, split_sql
+from .db import iter_sql, literal, qi, qt
 
 
 class Cancelled(Exception):
@@ -152,24 +152,41 @@ def read_sql_file(path):
         return raw.decode("latin-1")
 
 
+COMMIT_EVERY_S = 2.0  # import runs in transactions committed this often, not one commit per statement
+
+
+def _size(n_chars):
+    mb = n_chars / 1048576
+    return f"{mb:,.1f} MB" if mb >= 1 else f"{n_chars / 1024:,.0f} KB"
+
+
 def import_sql(task, conn, path, database=None, stop_on_error=True):
-    """Execute every statement of an SQL file. Returns a summary dict."""
+    """Execute every statement of an SQL file. Returns a summary dict.
+
+    Statements are split while the import runs (not all up front), so the first
+    statement starts within moments even on a huge file, and progress follows the
+    position in the file rather than the statement count (dumps mix tiny and huge
+    statements). Autocommit is off and work is committed every few seconds, which
+    saves the server a disk flush per statement."""
+    t0 = time.perf_counter()
     task.progress(0, "Reading file…")
     text = read_sql_file(path)
-    task.progress(1, "Parsing statements…")
-    stmts = split_sql(text)
+    size = max(1, len(text))
     conn.connect()
     if database:
         conn.use(database)
-    ok, errors = 0, []
-    total = max(1, len(stmts))
-    t0 = time.perf_counter()
+    ok, errors, count = 0, [], 0
     try:
         with conn.lock:
             cur = conn.conn.cursor()
-            for i, (sql, start, _end) in enumerate(stmts):
+            cur.execute("SET autocommit=0")
+            last_commit = time.monotonic()
+            for sql, start, end in iter_sql(text):
                 if task.cancelled:
                     raise Cancelled()
+                count += 1
+                task.progress(start * 100 // size,
+                              f"Statement {count:,} · {_size(start)} of {_size(size)}")
                 try:
                     cur.execute(sql)
                     if cur.description:
@@ -181,9 +198,17 @@ def import_sql(task, conn, path, database=None, stop_on_error=True):
                     errors.append(f"Line {line}: {msg}")
                     if stop_on_error:
                         break
-                task.progress(1 + i * 99 // total, f"Statement {i + 1:,} of {len(stmts):,}")
+                if time.monotonic() - last_commit >= COMMIT_EVERY_S:
+                    conn.conn.commit()
+                    last_commit = time.monotonic()
             cur.close()
     finally:
+        # What ran before an error or Cancel stays applied, as it did with autocommit.
+        if conn.conn:
+            try:
+                conn.conn.commit()
+            except pymysql.MySQLError:
+                pass
         conn.close()
     task.progress(100, "Done")
-    return {"ok": ok, "errors": errors, "total": len(stmts), "seconds": time.perf_counter() - t0}
+    return {"ok": ok, "errors": errors, "total": count, "seconds": time.perf_counter() - t0}
