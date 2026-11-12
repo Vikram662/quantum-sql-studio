@@ -2,7 +2,7 @@
 import os
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
                                QProgressBar, QPushButton, QVBoxLayout)
@@ -11,6 +11,21 @@ from . import dump, icons
 from .db import qi, run_async
 from .editor import read_only_code_view
 from .theme import T
+
+
+def format_duration(seconds):
+    """45 s · 2 m 05 s · 1 h 02 m 03 s · 2 d 03 h 04 m"""
+    s = int(seconds)
+    if s < 60:
+        return f"{s} s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m} m {s:02d} s"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h} h {m:02d} m {s:02d} s"
+    d, h = divmod(h, 24)
+    return f"{d} d {h:02d} h {m:02d} m"
 
 
 def _buttons(dialog, ok_text="OK"):
@@ -50,13 +65,20 @@ class ProgressDialog(QDialog):
         self.result = None
         self.error = None
         self._t0 = time.monotonic()
+        # Ticks on its own: progress events can be minutes apart while one huge statement runs.
+        self._clock = QTimer(self)
+        self._clock.timeout.connect(self._tick)
+        self._clock.start(500)
+        self._tick()
         self.task = run_async(fn, self._done, self._failed, self._progress)
+
+    def _tick(self):
+        self.elapsed.setText(format_duration(time.monotonic() - self._t0))
 
     def _progress(self, pct, msg):
         self.bar.setValue(pct)
         if msg:
             self.label.setText(msg)
-        self.elapsed.setText(f"{time.monotonic() - self._t0:.1f} s")
 
     def _cancel(self):
         self.task.cancelled = True
@@ -207,7 +229,7 @@ def import_file(parent, session, database=None):
     if err:
         QMessageBox.critical(parent, "Import failed", err)
         return True
-    msg = f"{result['ok']:,} of {result['total']:,} statements executed in {result['seconds']:.1f} s."
+    msg = f"{result['ok']:,} of {result['total']:,} statements executed in {format_duration(result['seconds'])}."
     if result["errors"]:
         details = "\n".join(result["errors"][:20])
         QMessageBox.warning(parent, "Import finished with errors", f"{msg}\n\n{details}")
