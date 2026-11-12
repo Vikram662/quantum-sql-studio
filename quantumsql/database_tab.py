@@ -1,5 +1,4 @@
 """Database tab: list of tables/views/routines with sizes and bulk actions."""
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLineEdit, QMessageBox, QVBoxLayout, QWidget
 
 from .db import human_size, qt, run_async

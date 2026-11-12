@@ -2,13 +2,14 @@
 import gzip
 import io
 import os
+import re
 import time
 import zipfile
 
 import pymysql
 
 from . import APP_NAME, APP_VERSION
-from .db import iter_sql, literal, qi, qt
+from .db import format_duration, iter_sql, literal, qi, qt
 
 
 class Cancelled(Exception):
@@ -155,9 +156,26 @@ def read_sql_file(path):
 COMMIT_EVERY_S = 2.0  # import runs in transactions committed this often, not one commit per statement
 
 
+_SPACES = re.compile(r"\s+")
+_NON_SPACE = re.compile(r"\S")
+_ROW_VERB = re.compile(r"\s*(INSERT|REPLACE|UPDATE|DELETE|SELECT|LOAD)\b", re.I)  # rowcount means rows
+
+
 def _size(n_chars):
     mb = n_chars / 1048576
     return f"{mb:,.1f} MB" if mb >= 1 else f"{n_chars / 1024:,.0f} KB"
+
+
+def _took(seconds):
+    if seconds < 1:
+        return f"{seconds * 1000:.0f} ms"
+    return f"{seconds:.1f} s" if seconds < 60 else format_duration(seconds)
+
+
+def _brief(sql, width=90):
+    """First words of a statement on one line, for the log."""
+    head = _SPACES.sub(" ", sql[:width * 3]).strip()
+    return head if len(head) <= width and len(sql) <= width * 3 else head[:width].rstrip() + " …"
 
 
 def import_sql(task, conn, path, database=None, stop_on_error=True):
@@ -167,15 +185,23 @@ def import_sql(task, conn, path, database=None, stop_on_error=True):
     statement starts within moments even on a huge file, and progress follows the
     position in the file rather than the statement count (dumps mix tiny and huge
     statements). Autocommit is off and work is committed every few seconds, which
-    saves the server a disk flush per statement."""
+    saves the server a disk flush per statement. Each statement is written to
+    task.log with its rows, size and time, so the import window can show it live."""
     t0 = time.perf_counter()
     task.progress(0, "Reading file…")
+    task.log(f"Reading {os.path.basename(path)} ({_size(os.path.getsize(path))} on disk)…")
     text = read_sql_file(path)
     size = max(1, len(text))
+    task.log(f"Read {_size(len(text))} of SQL in {_took(time.perf_counter() - t0)}")
     conn.connect()
+    p = conn.params
+    task.log(f"Connected to {p.get('user')}@{p.get('host')}:{p.get('port')} (server {conn.server_version})")
     if database:
         conn.use(database)
+        task.log(f"Using database {database}")
+    task.log(f"Running statements; changes are committed every {COMMIT_EVERY_S:g} s")
     ok, errors, count = 0, [], 0
+    line, line_pos = 1, 0  # line number of the current statement, counted incrementally
     try:
         with conn.lock:
             cur = conn.conn.cursor()
@@ -183,21 +209,40 @@ def import_sql(task, conn, path, database=None, stop_on_error=True):
             last_commit = time.monotonic()
             for sql, start, end in iter_sql(text):
                 if task.cancelled:
+                    task.log(f"Cancel requested; stopping before statement {count + 1:,}", "warn")
                     raise Cancelled()
                 count += 1
+                first = _NON_SPACE.search(text, start, end)  # start still holds the previous line's newline
+                first = first.start() if first else start
+                line += text.count("\n", line_pos, first)
+                line_pos = first
                 task.progress(start * 100 // size,
                               f"Statement {count:,} · {_size(start)} of {_size(size)}")
+                s0 = time.perf_counter()
                 try:
                     cur.execute(sql)
                     if cur.description:
                         cur.fetchall()
                     ok += 1
                 except pymysql.MySQLError as exc:
-                    line = text.count("\n", 0, start) + 1
                     msg = exc.args[1] if len(exc.args) > 1 else str(exc)
                     errors.append(f"Line {line}: {msg}")
+                    task.log(f"#{count:,} line {line:,}: {_brief(sql, 60)}", "error")
+                    task.log(f"    {msg}", "error")
                     if stop_on_error:
+                        task.log("Stopped at the first error (\"Stop on first error\" is on)", "warn")
                         break
+                    continue
+                parts = [f"#{count:,}", _brief(sql)]
+                if cur.rowcount and cur.rowcount > 0 and _ROW_VERB.match(sql):
+                    parts.append(f"{cur.rowcount:,} row{'s' if cur.rowcount != 1 else ''}")
+                if len(sql) >= 65536:
+                    parts.append(_size(len(sql)))
+                parts.append(_took(time.perf_counter() - s0))
+                warnings = getattr(getattr(cur, "_result", None), "warning_count", 0) or 0
+                if warnings:
+                    parts.append(f"{warnings:,} warning{'s' if warnings != 1 else ''}")
+                task.log(" · ".join(parts), "warn" if warnings else "info")
                 if time.monotonic() - last_commit >= COMMIT_EVERY_S:
                     conn.conn.commit()
                     last_commit = time.monotonic()
@@ -210,5 +255,14 @@ def import_sql(task, conn, path, database=None, stop_on_error=True):
             except pymysql.MySQLError:
                 pass
         conn.close()
-    task.progress(100, "Done")
-    return {"ok": ok, "errors": errors, "total": count, "seconds": time.perf_counter() - t0}
+    seconds = time.perf_counter() - t0
+    summary = f"{ok:,} of {count:,} statements executed in {format_duration(seconds)}"
+    if errors:
+        summary += f" · {len(errors):,} error{'s' if len(errors) != 1 else ''}"
+    task.log(f"Finished: {summary}", "warn" if errors else "ok")
+    for e in errors[:50]:  # repeated at the end so they are not lost far up the log
+        task.log(f"    {e}", "error")
+    if len(errors) > 50:
+        task.log(f"    … and {len(errors) - 50:,} more errors above", "error")
+    task.progress(100, summary)
+    return {"ok": ok, "errors": errors, "total": count, "seconds": seconds}

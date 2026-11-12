@@ -1,14 +1,13 @@
 """Global search: find a value in every text/number column of a database."""
 import time
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QLineEdit, QProgressBar, QPushButton,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QLineEdit, QPushButton,
                                QSpinBox, QVBoxLayout)
 
 from . import icons
-from .db import literal, qi, qt, run_async
+from .db import format_duration, literal, qi, qt, run_async
 from .grid import DataGrid, ResultModel
-from .ui import muted
+from .ui import ProgressBar, muted
 
 TEXT_TYPES = ("char", "varchar", "text", "tinytext", "mediumtext", "longtext", "enum", "set", "json")
 NUM_TYPES = ("int", "tinyint", "smallint", "mediumint", "bigint", "decimal", "float", "double")
@@ -58,7 +57,7 @@ class GlobalSearchDialog(QDialog):
         opts.addStretch(1)
         opts.addWidget(self.max_rows)
         lay.addLayout(opts)
-        self.bar = QProgressBar()
+        self.bar = ProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setValue(0)
         self.status = muted("Searches each table with one query — matching tables and columns are listed below. "
@@ -106,6 +105,8 @@ class GlobalSearchDialog(QDialog):
         conn = self.session.conn.clone()
         self._set_results([])
         self.b_go.setText("Stop")
+        self.bar.setValue(0)  # a new search starts from empty, not from the last 100 %
+        self.bar.set_busy(True)
         t0 = time.monotonic()
 
         def work(task):
@@ -157,11 +158,12 @@ class GlobalSearchDialog(QDialog):
             hits = [f for f in found if f["count"]]
             self._set_results(sorted(found, key=lambda f: (f["count"] is None, -(f["count"] or 0))))
             self.status.setText(f"{sum(f['count'] for f in hits):,} matching rows in {len({f['table'] for f in hits})}"
-                                f" table(s) · searched {n} tables in {time.monotonic() - t0:.1f} s")
+                                f" table(s) · searched {n} tables in {format_duration(time.monotonic() - t0)}")
 
         def failed(e):
             self.task = None
             self.b_go.setText("Search")
+            self.bar.set_busy(False)
             self.status.setText(f"Search failed: {e}")
         self.task = run_async(work, done, failed, progress)
 
