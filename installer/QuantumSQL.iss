@@ -5,7 +5,7 @@
 ; ============================================================
 
 #ifndef AppVersion
-  #define AppVersion "2.0.4"
+  #define AppVersion "2.0.5"
 #endif
 #define AppName       "Quantum SQL"
 #define AppPublisher  "Quantum SQL"

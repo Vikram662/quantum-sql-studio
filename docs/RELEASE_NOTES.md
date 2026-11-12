@@ -1,3 +1,22 @@
+## What's new in 2.0.5
+
+**Export log.** Export now has the same live log as import: each table with its rows, size and time, then views, procedures, functions and triggers. While a big table runs, the status shows how far it is (`120,000 of about 1,000,000 rows`). The window stays open at the end with the summary, including the size on disk for compressed dumps, plus Copy log and Save log.
+
+**No more freezes on a lost connection.** If the network drops silently (Wi-Fi change, VPN drop, laptop sleep), the app now notices within about two minutes and reconnects on your next action. Before, the server's connection could stay stuck for good and freeze the window.
+
+**More responsive**
+- Table data appears at once; the total row count fills in when it is ready, instead of holding up the table (counting a big table can take minutes).
+- Stop, Kill and Kill query work right away, even while the server's connection is busy with other work.
+- Auto-refresh of the process list no longer piles up queries on a slow server.
+- Opening Export, Add foreign key and Create database no longer freezes the window while their lists load.
+
+**Fixes**
+- Export saved triggers with the source database name, so restoring into another database failed or put the trigger back in the source database.
+- Export included triggers of tables you did not select, which made the restore fail.
+- Cancelling an export in a large table could hang until every row had been read.
+- A cancelled or failed export left a half-written file that looked like a complete dump; it is now deleted.
+- Clicking two tables quickly could show the first table's rows under the second table's name.
+
 ## What's new in 2.0.4
 
 **Import log.** The import window now shows a live log of every statement: rows affected, size, time taken and server warnings. Errors appear in red with their line number and are listed again under the summary at the end. The window stays open when the import finishes, so you can read the log, copy it or save it to a file.
