@@ -507,10 +507,18 @@ class MainWindow(QMainWindow):
             if self.db_tab.isVisible():
                 self.db_tab.refresh()
 
-    def cached_objects(self, session, db):
-        if db not in session.objects:
-            session.objects[db] = session.conn.objects(db)
-        return session.objects[db]
+    def load_objects(self, session, db, on_done, on_error=None):
+        """Objects of a database, from the cache or loaded in the background."""
+        if db in session.objects:
+            on_done(session.objects[db])
+            return
+        conn = session.conn
+        self.status(f"Loading {db}…")
+
+        def loaded(objs):
+            session.objects[db] = objs
+            on_done(objs)
+        run_async(lambda: conn.objects(db), loaded, on_error or (lambda e: self.status(e, error=True)))
 
     def database_names(self, session):
         root = session.item
@@ -686,14 +694,18 @@ class MainWindow(QMainWindow):
         session = session or self._ctx()[0]
         if not session:
             return
-        dlg = CreateDatabaseDialog(self, session.conn.collations())
-        if dlg.exec() and dlg.name.text().strip():
-            name = dlg.name.text().strip()
-            self._run_sql(session, dlg.sql(),
-                          lambda *_: (self.status(f"Database {name} created."),
-                                      self._load_server(session.item,
-                                                        lambda: self.select_object(session, name))),
-                          "Create database")
+        def show(collations):
+            dlg = CreateDatabaseDialog(self, collations)
+            if dlg.exec() and dlg.name.text().strip():
+                name = dlg.name.text().strip()
+                self._run_sql(session, dlg.sql(),
+                              lambda *_: (self.status(f"Database {name} created."),
+                                          self._load_server(session.item,
+                                                            lambda: self.select_object(session, name))),
+                              "Create database")
+
+        conn = session.conn  # collations load in the background, like everything else on this connection
+        run_async(conn.collations, show, lambda e: QMessageBox.critical(self, "Create database", e))
 
     def drop_database(self, session, db):
         if confirm(self, "Drop database", f"Drop database “{db}” and ALL its tables?\n\nThis cannot be undone.",
@@ -801,12 +813,11 @@ class MainWindow(QMainWindow):
         if not session or not db:
             QMessageBox.information(self, "Export", "Select a database in the tree first.")
             return
-        try:
-            objs = self.cached_objects(session, db)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Export", str(exc))
-            return
-        ExportDialog(self, session, db, [o["name"] for o in objs if o["kind"] == "table"], tables).exec()
+        def show(objs):
+            ExportDialog(self, session, db, [o["name"] for o in objs if o["kind"] == "table"], tables).exec()
+
+        # Loaded in the background: on the UI thread a busy session connection freezes the window.
+        self.load_objects(session, db, show, lambda e: QMessageBox.critical(self, "Export", e))
 
     # ══ query tabs ════════════════════════════════════════════════════════
     def new_query(self, session=None, db=None, sql="", switch=True):

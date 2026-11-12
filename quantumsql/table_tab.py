@@ -525,11 +525,25 @@ class TableTab(QWidget):
 
     def add_fk(self):
         conn, db = self.session.conn, self.db
-        tables = [o["name"] for o in self.main.cached_objects(self.session, db) if o["kind"] == "table"]
-        dlg = ForeignKeyDialog(self, self.table, [c["name"] for c in self.orig_cols], tables,
-                               lambda t: [c["Field"] for c in conn.columns(db, t)])
-        if dlg.exec():
-            self._alter(dlg.clause(), "Add foreign key")
+
+        def load():
+            # every table's columns in one query, off the UI thread; the dialog then only looks up
+            cols = {}
+            for table, col in conn.rows(
+                    "SELECT c.TABLE_NAME, c.COLUMN_NAME FROM information_schema.COLUMNS c "
+                    "JOIN information_schema.TABLES t ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME "
+                    "WHERE c.TABLE_SCHEMA=%s AND t.TABLE_TYPE='BASE TABLE' "
+                    "ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION", (db,)):
+                cols.setdefault(table, []).append(col)
+            return cols
+
+        def show(cols):
+            dlg = ForeignKeyDialog(self, self.table, [c["name"] for c in self.orig_cols], sorted(cols),
+                                   lambda t: cols.get(t, []))
+            if dlg.exec():
+                self._alter(dlg.clause(), "Add foreign key")
+
+        run_async(load, show, lambda e: QMessageBox.critical(self, "Add foreign key", e))
 
     def drop_fk(self):
         idx = self.fk_grid.currentIndex()
