@@ -96,6 +96,7 @@ class HostTab(QWidget):
             self.tabs.addTab(page, title)
         self.tabs.currentChanged.connect(lambda *_: self._ensure_loaded())
 
+        self._running = set()  # (session, page) pairs with a query in flight
         self.timer = QTimer(self)
         self.timer.timeout.connect(lambda: self.isVisible() and self._load("proc"))
 
@@ -148,12 +149,19 @@ class HostTab(QWidget):
             "users": ("SELECT User, Host FROM mysql.user ORDER BY User, Host", None),
         }
         sql, page = queries[key]
+        # One query per page at a time: auto refresh every 3 s on a slow or stuck server would
+        # otherwise queue a new task each tick until every worker thread is blocked.
+        run_key = (id(self.session), key)
+        if run_key in self._running:
+            return
+        self._running.add(run_key)
 
         polling = key == "proc" and self.auto.isChecked()
         if not polling:  # no veil every 3 s while auto refresh is on
             self.loader.start()
 
         def done(res):
+            self._running.discard(run_key)
             self.loader.stop()
             headers, rows, _ = res
             if page is None:
@@ -161,8 +169,12 @@ class HostTab(QWidget):
             else:
                 page.set_data(headers, rows)
 
-        run_async(lambda: conn.query(sql, log=key != "proc"), done,
-                  lambda e: (self.loader.stop(), self.main.status(e, error=True)), quiet=polling)
+        def failed(e):
+            self._running.discard(run_key)
+            self.loader.stop()
+            self.main.status(e, error=True)
+
+        run_async(lambda: conn.query(sql, log=key != "proc"), done, failed, quiet=polling)
 
     def _open_db(self, index):
         db = self.p_dbs.grid.model().rows[index.row()][0]
@@ -179,7 +191,7 @@ class HostTab(QWidget):
             return
         if confirm(self, "Kill process", f"Kill process {pid}?", danger=True):
             conn = self.session.conn
-            run_async(lambda: conn.execute(f"KILL {int(pid)}"), lambda *_: self._load("proc"),
+            run_async(lambda: conn.kill(pid), lambda *_: self._load("proc"),
                       lambda e: QMessageBox.critical(self, "Kill failed", e))
 
     # ── users ──

@@ -4,6 +4,7 @@ import datetime
 import decimal
 import inspect
 import re
+import socket
 import ssl
 import threading
 import time
@@ -236,6 +237,32 @@ class QueryLog(QObject):
 query_log = QueryLog()
 
 
+KEEPALIVE_IDLE_S, KEEPALIVE_INTERVAL_S, KEEPALIVE_PROBES = 30, 10, 3
+
+
+def _keepalive(sock):
+    """Let the OS notice a dead server within about a minute.
+
+    There is no read timeout (long queries are legitimate), so without keepalive a
+    connection whose network silently vanished (Wi-Fi change, VPN drop, sleep, NAT
+    expiry) waits for a reply forever, holding the connection lock, and every later
+    action on that session freezes behind it. Best effort: unsupported options are skipped."""
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows: (on, idle ms, interval ms)
+            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, KEEPALIVE_IDLE_S * 1000, KEEPALIVE_INTERVAL_S * 1000))
+            return
+        idle = getattr(socket, "TCP_KEEPIDLE", None) or getattr(socket, "TCP_KEEPALIVE", None)  # Linux / macOS
+        for opt, value in ((idle, KEEPALIVE_IDLE_S), (getattr(socket, "TCP_KEEPINTVL", None), KEEPALIVE_INTERVAL_S),
+                           (getattr(socket, "TCP_KEEPCNT", None), KEEPALIVE_PROBES)):
+            if opt is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, opt, value)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 class DbConnection:
     def __init__(self, params):
         self.params = dict(params)
@@ -245,6 +272,15 @@ class DbConnection:
 
     def clone(self):
         return DbConnection(self.params)
+
+    def kill(self, thread_id, query_only=False):
+        """KILL [QUERY] on a short-lived connection of its own. The shared session connection
+        may be busy or stuck, and a kill that waits behind it never stops anything."""
+        killer = self.clone()
+        try:
+            return killer.execute(f"KILL {'QUERY ' if query_only else ''}{int(thread_id)}")
+        finally:
+            killer.close()
 
     def connect(self):
         p = self.params
@@ -260,8 +296,9 @@ class DbConnection:
                 database=p.get("database") or None, charset="utf8mb4",
                 autocommit=True, connect_timeout=int(p.get("timeout") or 10),
                 local_infile=False, client_flag=CLIENT.FOUND_ROWS)
+            _keepalive(self.conn._sock)
             self.server_version = self.conn.get_server_info()
-            via = f" via SSH {p.get('ssh_user')}@{p.get('ssh_host')}" if p.get("ssh_enabled") else ""
+            via =f" via SSH {p.get('ssh_user')}@{p.get('ssh_host')}" if p.get("ssh_enabled") else ""
             if isinstance(self.conn._sock, ssl.SSLSocket):
                 secure = ", TLS encrypted"
             elif p.get("ssh_enabled"):
@@ -508,6 +545,7 @@ class _Activity(QObject):
 
 
 activity = _Activity()
+MIN_WORKERS = 16
 _alive = set()
 
 
@@ -534,7 +572,12 @@ def run_async(fn, on_done=None, on_error=None, on_progress=None, quiet=False):
         activity.add(1)
         signals.done.connect(lambda *_: activity.add(-1))
         signals.error.connect(lambda *_: activity.add(-1))
-    QThreadPool.globalInstance().start(_Worker(fn, signals, task))
+    pool = QThreadPool.globalInstance()
+    # Workers mostly wait on the network, not the CPU. The default (one per core) lets a few
+    # tasks stuck on a slow server queue every other background job in the app behind them.
+    if pool.maxThreadCount() < MIN_WORKERS:
+        pool.setMaxThreadCount(MIN_WORKERS)
+    pool.start(_Worker(fn, signals, task))
     return task
 
 

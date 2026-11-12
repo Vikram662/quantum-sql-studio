@@ -515,8 +515,8 @@ class QueryTab(QWidget):
         self.task.cancelled = True
         tid = getattr(self, "thread_id", None)
         if tid:
-            meta = self.session.conn
-            run_async(lambda: meta.execute(f"KILL QUERY {int(tid)}"), None, None)
+            meta = self.session.conn  # kill() uses its own connection, never waits behind this one
+            run_async(lambda: meta.kill(tid, query_only=True), None, None)
         self.main.status("Stopping query…")
 
     # ── editor helpers ──

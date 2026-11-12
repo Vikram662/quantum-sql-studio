@@ -874,7 +874,7 @@ class MonitorTab(QWidget):
         if not confirm(self, "Kill", f"Kill {what} {pid} ({row[1]}@{row[2]})?\n\n{str(row[8])[:300]}", danger=True):
             return
         conn = self.session.conn
-        run_async(lambda: conn.execute(f"KILL {'QUERY ' if query_only else ''}{pid}"),
+        run_async(lambda: conn.kill(pid, query_only),
                   lambda *_: self.main.status(f"Killed {what} {pid}."),
                   lambda e: QMessageBox.critical(self, "Kill failed", e))
 

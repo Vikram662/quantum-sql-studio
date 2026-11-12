@@ -23,6 +23,7 @@ class DataTab(QWidget):
         self.total = 0
         self.sort = None  # (column, "ASC"|"DESC")
         self._loaded_key = None
+        self._ticket = None  # identifies the newest load; older answers are ignored
         self.model = None
         self._saving = False
         self.undo_stacks = {}  # (session id, db, table) -> [{"time", "what", "stmts"}]
@@ -109,26 +110,72 @@ class DataTab(QWidget):
         count_sql = f"SELECT COUNT(*) FROM {qt(db, table)}" + (f" WHERE {where}" if where else "")
         self.title.setText(f"Loading {db}.{table}…")
         self.loader.start(f"Loading {db}.{table}…")
+        # A ticket per load: when the user moves on to another table before this one answers,
+        # the late result is dropped instead of being shown under the new table's name.
+        ticket = self._ticket = object()
+        kind = self.kind
 
         def work():
-            keys = conn.primary_key(db, table) if self.kind == "table" else []
-            if not keys and self.kind == "table":
+            keys = conn.primary_key(db, table) if kind == "table" else []
+            if not keys and kind == "table":
                 uniq = [i for i in conn.indexes(db, table) if i["type"] == "UNIQUE"]
                 keys = [c.split("(")[0] for c in uniq[0]["columns"]] if uniq else []
             headers, rows, _ = conn.query(sql)
-            total = conn.rows(count_sql)[0][0]
-            return keys, headers, rows, total
+            return keys, headers, rows
 
-        run_async(work, self._loaded, self._failed)
+        def loaded(res):
+            if ticket is not self._ticket:
+                return
+            keys, headers, rows = res
+            if len(rows) < limit:  # last page: the total is known without counting
+                self._show(keys, headers, rows, offset + len(rows), counted=True)
+                return
+            self._show(keys, headers, rows, offset + len(rows) + 1, counted=False)
+            self._count(count_sql, ticket)
+
+        def failed(msg):
+            if ticket is self._ticket:
+                self._failed(msg)
+
+        run_async(work, loaded, failed)
+
+    def _count(self, count_sql, ticket):
+        """COUNT(*) after the rows are shown. On a big InnoDB table it can take minutes, so it
+        runs on a short-lived connection of its own and never holds up the session."""
+        counter = self.session.conn.clone()
+
+        def work():
+            try:
+                return counter.rows(count_sql)[0][0]
+            finally:
+                counter.close()
+
+        def counted(total):
+            if ticket is self._ticket and self.model is not None:
+                self._show_total(total)
+
+        def failed(msg):
+            if ticket is self._ticket:
+                self.page.setToolTip(f"Counting rows failed: {msg}")
+        run_async(work, counted, failed, quiet=True)
 
     def _failed(self, msg):
         self.loader.stop()
         self.title.setText("Error")
         QMessageBox.critical(self, "Data", msg)
 
-    def _loaded(self, res):
+    def _show_total(self, total, counted=True):
+        self.total = total
+        n = self.model.rowCount() if self.model else 0
+        key_note = (f"key: {', '.join(self.key_cols)}" if self.key_cols
+                    else "no primary key — edits match all columns")
+        rows_text = f"{total:,} rows" if counted else "counting rows…"
+        self.title.setText(f"{self.db}.{self.table}  ·  {rows_text}  ·  {key_note}")
+        of = f"{total:,}" if counted else "…"
+        self.page.setText(f"{self.offset + 1 if n else 0:,}–{self.offset + n:,} of {of}")
+
+    def _show(self, keys, headers, rows, total, counted):
         self.loader.stop()
-        keys, headers, rows, total = res
         self.key_cols, self.total = keys, total
         self.model = ResultModel(headers, rows, editable=(self.kind == "table"), offset=self.offset)
         self.model.changed.connect(self._update_buttons)
@@ -141,10 +188,8 @@ class DataTab(QWidget):
                 headers.index(self.sort[0]), Qt.AscendingOrder if self.sort[1] == "ASC" else Qt.DescendingOrder)
         else:
             self.grid.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        key_note = f"key: {', '.join(keys)}" if keys else "no primary key — edits match all columns"
-        self.title.setText(f"{self.db}.{self.table}  ·  {total:,} rows  ·  {key_note}")
-        end = self.offset + len(rows)
-        self.page.setText(f"{self.offset + 1 if rows else 0:,}–{end:,} of {total:,}")
+        self.page.setToolTip("")
+        self._show_total(total, counted)
         self._update_buttons()
 
     def _update_buttons(self):

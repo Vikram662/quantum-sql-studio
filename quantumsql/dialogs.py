@@ -34,8 +34,9 @@ class ProgressDialog(QDialog):
 
     LOG_BATCH = 2000  # most lines added per refresh; a flood beyond that is summarised
 
-    def __init__(self, parent, title, fn, log=False):
+    def __init__(self, parent, title, fn, log=False, log_name="log"):
         super().__init__(parent)
+        self._log_name = log_name
         self.setWindowTitle(title)
         self.setModal(True)
         if log:
@@ -122,7 +123,7 @@ class ProgressDialog(QDialog):
 
     def _save_log(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save log", os.path.join(
-            os.path.expanduser("~"), "Documents", f"import_{time.strftime('%Y%m%d_%H%M')}.log"),
+            os.path.expanduser("~"), "Documents", f"{self._log_name}_{time.strftime('%Y%m%d_%H%M')}.log"),
             "Log file (*.log *.txt)")
         if path:
             with open(path, "w", encoding="utf-8") as f:
@@ -185,9 +186,9 @@ class ProgressDialog(QDialog):
         super().reject()
 
 
-def run_with_progress(parent, title, fn, log=False):
-    """Returns (result, error)."""
-    dlg = ProgressDialog(parent, title, fn, log)
+def run_with_progress(parent, title, fn, log=False, log_name="log"):
+    """Returns (result, error). log=True shows a live log; log_name names the saved log file."""
+    dlg = ProgressDialog(parent, title, fn, log, log_name)
     dlg.exec()
     return dlg.result, dlg.error
 
@@ -278,15 +279,12 @@ class ExportDialog(QDialog):
         conn = self.session.conn.clone()
         path, opts = self.path.text().strip(), self.options()
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        result, err = run_with_progress(
-            self, "Exporting…", lambda task: dump.dump_database(task, conn, self.db, path, tables, opts))
+        # The progress window shows the live log and the summary and stays open at the end.
+        _, err = run_with_progress(self, f"Exporting {self.db}",
+                                   lambda task: dump.dump_database(task, conn, self.db, path, tables, opts),
+                                   log=True, log_name="export")
         if err:
-            QMessageBox.critical(self, "Export failed", err)
-            return
-        size = os.path.getsize(path) if os.path.exists(path) else 0
-        QMessageBox.information(self, "Export finished",
-                                f"Exported {result['tables']} tables and {result['views']} views.\n\n"
-                                f"{path}\n{size / 1024 / 1024:.2f} MiB")
+            return  # keep the export options open to retry, e.g. with another path
         super().accept()
 
 
@@ -312,7 +310,8 @@ def import_file(parent, session, database=None):
     # The dialog shows the live log and stays open at the end with the summary, so no
     # separate message box is needed for success, errors or cancel.
     run_with_progress(parent, f"Importing {os.path.basename(path)}",
-                      lambda task: dump.import_sql(task, conn, path, database, stop.isChecked()), log=True)
+                      lambda task: dump.import_sql(task, conn, path, database, stop.isChecked()),
+                      log=True, log_name="import")
     return True
 
 
