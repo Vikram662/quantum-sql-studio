@@ -1,10 +1,89 @@
 """Small widget helpers shared by the tabs."""
 from PySide6.QtCore import QEvent, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMessageBox, QToolButton, QWidget
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QToolButton, QWidget
 
 from . import icons
 from .theme import T
+
+
+class ProgressBar(QProgressBar):
+    """Progress bar with a theme-coloured gradient fill (stylesheet), a soft highlight that
+    sweeps across the fill while work is running, like the Windows progress bar, and a
+    percentage that is white over the fill and normal text colour over the empty part."""
+
+    SHINE_PX_PER_S = 260
+    SHINE_WIDTH = 110
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setRange(0, 100)
+        self.setTextVisible(False)  # the style draws bar and chunk; the text is painted below
+        self._shine = 0.0
+        self._busy = True
+        self._anim = QTimer(self)
+        self._anim.setInterval(33)
+        self._anim.timeout.connect(self._step)
+
+    def set_busy(self, busy):
+        """False stops the shine on a bar left part-filled (failed or cancelled work)."""
+        self._busy = busy
+        self.update()
+
+    def _running(self):
+        return self._busy and self.minimum() < self.value() < self.maximum()
+
+    def _step(self):
+        if self._running():
+            self._shine += self.SHINE_PX_PER_S * self._anim.interval() / 1000
+            self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._anim.start()
+
+    def hideEvent(self, event):
+        self._anim.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        span = self.maximum() - self.minimum()
+        if span <= 0:
+            return
+        inner = self.rect().adjusted(1, 1, -1, -1)  # inside the 1px border from the stylesheet
+        fill = int(inner.width() * (self.value() - self.minimum()) / span)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        if self._running() and fill > 6:
+            # Band travels from just before the fill to just past its end, then restarts.
+            w = self.SHINE_WIDTH
+            x = inner.left() - w + self._shine % (fill + w * 2)
+            grad = QLinearGradient(x, 0, x + w, 0)
+            glow = QColor(255, 255, 255, 0)
+            grad.setColorAt(0, glow)
+            glow.setAlpha(80)
+            grad.setColorAt(0.5, glow)
+            glow.setAlpha(0)
+            grad.setColorAt(1, glow)
+            clip = QPainterPath()
+            clip.addRoundedRect(QRectF(inner.left(), inner.top(), fill, inner.height()), 3, 3)
+            p.setClipPath(clip)
+            p.fillRect(QRectF(x, inner.top(), w, inner.height()), grad)
+            p.setClipping(False)
+        text = self.text()
+        if not text:
+            p.end()
+            return
+        p.setFont(self.font())
+        for color, clip in ((T["accent_text"], inner.adjusted(0, 0, fill - inner.width(), 0)),
+                            (T["text"], inner.adjusted(fill, 0, 0, 0))):
+            p.save()
+            p.setClipRect(clip)
+            p.setPen(QColor(color))
+            p.drawText(self.rect(), Qt.AlignCenter, text)
+            p.restore()
+        p.end()
 
 
 def _draw_spinner(p, rect, angle, width=3.0):

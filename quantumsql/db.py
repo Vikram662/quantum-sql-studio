@@ -1,4 +1,5 @@
 """MySQL/MariaDB connection wrapper, SQL helpers and background workers."""
+import collections
 import datetime
 import decimal
 import inspect
@@ -430,19 +431,48 @@ class _Signals(QObject):
     progress = Signal(int, str)
 
 
+def format_duration(seconds):
+    """45 s · 2 m 05 s · 1 h 02 m 03 s · 2 d 03 h 04 m"""
+    s = int(seconds)
+    if s < 60:
+        return f"{s} s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m} m {s:02d} s"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h} h {m:02d} m {s:02d} s"
+    d, h = divmod(h, 24)
+    return f"{d} d {h:02d} h {m:02d} m"
+
+
+def format_clock(seconds):
+    """Log timestamp since the start: 03:07, or 1:02:03 past an hour."""
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
 class Task:
-    """Handed to long-running functions so they can report progress and check cancel."""
+    """Handed to long-running functions so they can report progress, log and check cancel."""
 
     def __init__(self, signals):
         self._signals = signals
         self.cancelled = False
         self._last = 0.0
+        # (monotonic time, level, text). A deque is thread-safe for append/popleft, so the
+        # worker appends and the progress dialog drains it on a timer; no signal per line.
+        self.log_lines = collections.deque(maxlen=50_000)
 
     def progress(self, percent, message=""):
         now = time.monotonic()
         if now - self._last > 0.08 or percent >= 100:
             self._last = now
             self._signals.progress.emit(int(percent), message)
+
+    def log(self, text, level="info"):
+        """level: info, ok, warn, error."""
+        self.log_lines.append((time.monotonic(), level, text))
 
 
 class _Worker(QRunnable):
@@ -457,7 +487,8 @@ class _Worker(QRunnable):
             msg = exc.args[1] if isinstance(exc, pymysql.MySQLError) and len(exc.args) > 1 else str(exc)
             if isinstance(exc, pymysql.MySQLError) and exc.args and isinstance(exc.args[0], int):
                 msg = f"SQL Error ({exc.args[0]}): {msg}"
-            query_log.message.emit(msg, "error")
+            if not (self.task and self.task.cancelled):  # a cancel is not an error for the query log
+                query_log.message.emit(msg, "error")
             self.signals.error.emit(msg)
         else:
             self.signals.done.emit(result)

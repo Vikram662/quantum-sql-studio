@@ -147,7 +147,8 @@ QSplitter::handle:vertical {{ height: 1px; }}
 
 QToolTip {{ background: {raised}; color: {text}; border: 1px solid {border}; padding: 5px; border-radius: 4px; }}
 QProgressBar {{ background: {surface}; border: 1px solid {border}; border-radius: 4px; text-align: center; height: 16px; }}
-QProgressBar::chunk {{ background: {accent}; border-radius: 3px; }}
+QProgressBar::chunk {{ border-radius: 3px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+    stop:0 {accent_top}, stop:0.5 {accent}, stop:1 {accent_bottom}); }}
 
 QLabel#h1 {{ font-size: 15pt; font-weight: 600; }}
 QLabel#h2 {{ font-size: 11pt; font-weight: 600; }}
@@ -227,7 +228,9 @@ def apply(app, name="dark"):
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
         pal.setColor(QPalette.Disabled, role, c("faint"))
     app.setPalette(pal)
-    qss = QSS.format(**T, **UI_FONT)
+    accent = QColor(T["accent"])  # progress bar gradient, derived from the theme accent
+    shades = {"accent_top": accent.lighter(130).name(), "accent_bottom": accent.darker(115).name()}
+    qss = QSS.format(**T, **UI_FONT, **shades)
     try:
         qss += ASSET_QSS.format(**T, **_write_svg_assets())
     except OSError:

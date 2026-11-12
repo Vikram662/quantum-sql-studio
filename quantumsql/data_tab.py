@@ -3,7 +3,7 @@ import time
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QMessageBox, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLineEdit, QMessageBox, QSpinBox, QVBoxLayout, QWidget
 
 from . import icons
 from .config import settings

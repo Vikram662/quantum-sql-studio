@@ -1128,7 +1128,7 @@ class MainWindow(QMainWindow):
         dlg.resize(980, 760)
         view = QTextBrowser(dlg)
         view.setOpenExternalLinks(True)
-        view.document().setDefaultStyleSheet(f"table {{ border-collapse: collapse; }} td, th {{ padding: 4px 8px; }}")
+        view.document().setDefaultStyleSheet("table { border-collapse: collapse; } td, th { padding: 4px 8px; }")
         view.setMarkdown(text)
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(0, 0, 0, 0)

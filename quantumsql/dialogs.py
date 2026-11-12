@@ -1,31 +1,19 @@
 """Assorted dialogs: dump/import, progress, create database, SQL preview, index/FK editors."""
+import html
 import os
 import time
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-                               QProgressBar, QPushButton, QVBoxLayout)
+                               QPlainTextEdit, QPushButton, QVBoxLayout)
 
 from . import dump, icons
-from .db import qi, run_async
+from .db import format_clock, format_duration, qi, run_async
 from .editor import read_only_code_view
-from .theme import T
-
-
-def format_duration(seconds):
-    """45 s · 2 m 05 s · 1 h 02 m 03 s · 2 d 03 h 04 m"""
-    s = int(seconds)
-    if s < 60:
-        return f"{s} s"
-    m, s = divmod(s, 60)
-    if m < 60:
-        return f"{m} m {s:02d} s"
-    h, m = divmod(m, 60)
-    if h < 24:
-        return f"{h} h {m:02d} m {s:02d} s"
-    d, h = divmod(h, 24)
-    return f"{d} d {h:02d} h {m:02d} m"
+from .theme import T, code_font
+from .ui import ProgressBar
 
 
 def _buttons(dialog, ok_text="OK"):
@@ -39,42 +27,108 @@ def _buttons(dialog, ok_text="OK"):
 
 
 class ProgressDialog(QDialog):
-    """Runs fn(task) in the background with a progress bar and Cancel button."""
+    """Runs fn(task) in the background with a progress bar and Cancel button.
 
-    def __init__(self, parent, title, fn):
+    With log=True it also shows what fn writes with task.log(), live, and stays open
+    when the work ends so the log can be read, copied or saved."""
+
+    LOG_BATCH = 2000  # most lines added per refresh; a flood beyond that is summarised
+
+    def __init__(self, parent, title, fn, log=False):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(460, 140)
+        if log:
+            self.resize(760, 480)
+        else:
+            self.resize(460, 140)
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         lay = QVBoxLayout(self)
         self.label = QLabel("Starting…")
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 100)
+        self.label.setWordWrap(True)  # a long error message must not stretch the dialog
+        self.bar = ProgressBar()
         self.elapsed = QLabel("")
         self.elapsed.setObjectName("muted")
         lay.addWidget(self.label)
         lay.addWidget(self.bar)
+        self.log_view = None
+        if log:
+            self.log_view = QPlainTextEdit()
+            self.log_view.setReadOnly(True)
+            self.log_view.setFont(code_font(9))
+            self.log_view.setLineWrapMode(QPlainTextEdit.NoWrap)
+            self.log_view.setMaximumBlockCount(20_000)
+            self.log_view.setMinimumHeight(220)
+            lay.addWidget(self.log_view, 1)
         row = QHBoxLayout()
         row.addWidget(self.elapsed)
         row.addStretch(1)
+        if log:
+            copy_btn = QPushButton("Copy log")
+            copy_btn.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.log_view.toPlainText()))
+            save_btn = QPushButton("Save log…")
+            save_btn.clicked.connect(self._save_log)
+            for b in (copy_btn, save_btn):  # Enter must not copy or save; it belongs to Cancel / Close
+                b.setAutoDefault(False)
+                row.addWidget(b)
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self._cancel)
+        self.cancel_btn.clicked.connect(self._cancel_or_close)
         row.addWidget(self.cancel_btn)
         lay.addLayout(row)
         self.result = None
         self.error = None
+        self._finished = False
         self._t0 = time.monotonic()
+        self.task = None
         # Ticks on its own: progress events can be minutes apart while one huge statement runs.
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick)
-        self._clock.start(500)
+        self._clock.start(250 if log else 500)
         self._tick()
         self.task = run_async(fn, self._done, self._failed, self._progress)
 
     def _tick(self):
         self.elapsed.setText(format_duration(time.monotonic() - self._t0))
+        self._drain_log()
 
+    # ── log ──
+    def _drain_log(self):
+        if self.log_view is None or self.task is None:
+            return
+        q = self.task.log_lines
+        n = len(q)
+        if not n:
+            return
+        skipped = max(0, n - self.LOG_BATCH)
+        for _ in range(skipped):
+            q.popleft()
+        lines = [q.popleft() for _ in range(n - skipped)]
+        sb = self.log_view.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 4
+        colors = {"ok": T["success"], "warn": T["warning"], "error": T["danger"]}
+        if skipped:
+            self._append(f"… {skipped:,} lines skipped to keep up …", T["muted"])
+        for when, level, text in lines:
+            stamp = format_clock(when - self._t0)
+            self._append(f"[{stamp}] {text}", colors.get(level))
+        if at_bottom:
+            sb.setValue(sb.maximum())
+
+    def _append(self, text, color=None):
+        if color:
+            self.log_view.appendHtml(f'<span style="color:{color}">{html.escape(text)}</span>')
+        else:
+            self.log_view.appendPlainText(text)
+
+    def _save_log(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save log", os.path.join(
+            os.path.expanduser("~"), "Documents", f"import_{time.strftime('%Y%m%d_%H%M')}.log"),
+            "Log file (*.log *.txt)")
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.log_view.toPlainText())
+
+    # ── lifecycle ──
     def _progress(self, pct, msg):
         self.bar.setValue(pct)
         if msg:
@@ -85,24 +139,55 @@ class ProgressDialog(QDialog):
         self.cancel_btn.setEnabled(False)
         self.label.setText("Cancelling…")
 
+    def _cancel_or_close(self):
+        if self._finished:
+            self.done(QDialog.Accepted if self.error is None else QDialog.Rejected)
+        else:
+            self._cancel()
+
+    def _finish(self, label):
+        """Log mode: stop the clock and leave the dialog open with a Close button."""
+        self._finished = True
+        self._clock.stop()
+        self.bar.set_busy(False)
+        self._tick()
+        self._drain_log()
+        self.label.setText(label)
+        self.cancel_btn.setText("Close")
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.setProperty("primary", True)
+        self.cancel_btn.style().polish(self.cancel_btn)
+        self.cancel_btn.setFocus()
+
     def _done(self, result):
         self.result = result
-        self.accept()
+        if self.log_view is None:
+            self.accept()
+            return
+        self.bar.setValue(100)
+        self._finish(self.label.text())
 
     def _failed(self, msg):
         self.error = "Cancelled by user." if self.task.cancelled else msg
-        self.reject()
+        if self.log_view is None:
+            self.reject()
+            return
+        self.task.log(self.error, "warn" if self.task.cancelled else "error")
+        self._finish("Cancelled." if self.task.cancelled else f"Failed: {msg}")
 
     def reject(self):
+        if self.log_view is not None and self._finished:
+            self._cancel_or_close()
+            return
         if self.result is None and self.error is None:  # Esc pressed while running
             self._cancel()
             return
         super().reject()
 
 
-def run_with_progress(parent, title, fn):
+def run_with_progress(parent, title, fn, log=False):
     """Returns (result, error)."""
-    dlg = ProgressDialog(parent, title, fn)
+    dlg = ProgressDialog(parent, title, fn, log)
     dlg.exec()
     return dlg.result, dlg.error
 
@@ -224,17 +309,10 @@ def import_file(parent, session, database=None):
     if box.exec() != QMessageBox.Yes:
         return False
     conn = session.conn.clone()
-    result, err = run_with_progress(
-        parent, "Importing…", lambda task: dump.import_sql(task, conn, path, database, stop.isChecked()))
-    if err:
-        QMessageBox.critical(parent, "Import failed", err)
-        return True
-    msg = f"{result['ok']:,} of {result['total']:,} statements executed in {format_duration(result['seconds'])}."
-    if result["errors"]:
-        details = "\n".join(result["errors"][:20])
-        QMessageBox.warning(parent, "Import finished with errors", f"{msg}\n\n{details}")
-    else:
-        QMessageBox.information(parent, "Import finished", msg)
+    # The dialog shows the live log and stays open at the end with the summary, so no
+    # separate message box is needed for success, errors or cancel.
+    run_with_progress(parent, f"Importing {os.path.basename(path)}",
+                      lambda task: dump.import_sql(task, conn, path, database, stop.isChecked()), log=True)
     return True
 
 

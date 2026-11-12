@@ -204,6 +204,11 @@ class {t.class_name} extends Model
 """
 
 
+def _php(value):
+    """PHP single-quoted string literal: only backslash and quote are escapes there; $ and newlines stay literal."""
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
 def gen_laravel_migration(t):
     lines = []
     names = {c["name"] for c in t.cols}
@@ -211,7 +216,7 @@ def gen_laravel_migration(t):
         n, b, k = c["name"], c["base"], _kind(c)
         if "auto_increment" in c["extra"]:
             line = f"$table->{'id' if n == 'id' and b == 'bigint' else ('increments' if b == 'int' else 'bigIncrements')}"\
-                   f"({'' if n == 'id' and b == 'bigint' else repr(n)})"
+                   f"({'' if n == 'id' and b == 'bigint' else _php(n)})"
         elif n in ("created_at", "updated_at") and {"created_at", "updated_at"} <= names:
             if n == "created_at":
                 lines.append("$table->timestamps();")
@@ -232,9 +237,9 @@ def gen_laravel_migration(t):
             if c["unsigned"] and method in ("integer", "bigInteger", "smallInteger", "tinyInteger",
                                             "mediumInteger"):
                 method = "unsigned" + method[0].upper() + method[1:]
-            args = [repr(n)]
+            args = [_php(n)]
             if method == "enum":
-                args.append("[" + ", ".join(repr(v) for v in _enum_values(c["type"])) + "]")
+                args.append("[" + ", ".join(_php(v) for v in _enum_values(c["type"])) + "]")
             elif method in ("string", "char") and length and length.group(1) != "255":
                 args.append(length.group(1))
             elif method == "decimal" and length:
@@ -247,16 +252,16 @@ def gen_laravel_migration(t):
                 if str(d).upper().startswith("CURRENT_TIMESTAMP"):
                     line += "->useCurrent()"
                 else:
-                    line += f"->default({d if re.fullmatch(r'-?[0-9.]+', str(d)) else repr(str(d))})"
+                    line += f"->default({d if re.fullmatch(r'-?[0-9.]+', str(d)) else _php(str(d))})"
             if c["key"] == "UNI":
                 line += "->unique()"
             if c["comment"]:
-                line += f"->comment({c['comment']!r})"
-        lines.append(line.replace("'", "'") + ";")
+                line += f"->comment({_php(c['comment'])})"
+        lines.append(line + ";")
     for fk in t.fks:
-        lines.append(f"$table->foreign({fk['columns'][0]!r})->references({fk['ref_columns'][0]!r})"
-                     f"->on({fk['ref_table']!r})"
-                     + (f"->cascadeOnDelete()" if fk.get("on_delete") == "CASCADE" else "") + ";")
+        lines.append(f"$table->foreign({_php(fk['columns'][0])})->references({_php(fk['ref_columns'][0])})"
+                     f"->on({_php(fk['ref_table'])})"
+                     + ("->cascadeOnDelete()" if fk.get("on_delete") == "CASCADE" else "") + ";")
     body = "\n            ".join(lines)
     return f"""<?php
 
